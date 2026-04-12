@@ -456,6 +456,7 @@ export function createWebSearchTool(
       const details = (result.details || {}) as SearchDetails
       const queryCount = details.queryResults?.length || details.queries?.length || 0
       const isMultiQuery = queryCount > 1
+
       let text = details.aborted
         ? theme.fg('warning', 'Search aborted')
         : details.count
@@ -465,7 +466,12 @@ export function createWebSearchTool(
                 ? `${details.count} results across ${queryCount} queries`
                 : `${details.count} results`,
             )
-          : theme.fg('dim', isMultiQuery ? `No results across ${queryCount} queries` : 'No results found')
+          : theme.fg(
+              'dim',
+              isMultiQuery
+                ? `No results across ${queryCount} queries`
+                : 'No results found',
+            )
 
       if (details.provider) {
         text += ` ${theme.fg('muted', `via ${details.provider}`)}`
@@ -475,26 +481,43 @@ export function createWebSearchTool(
       }
       text += renderBadges(theme, details)
 
-      if (expanded && details.responseId) {
-        text += `\n${theme.fg('muted', `Stored responseId: ${details.responseId}`)}`
+      if (!expanded) {
+        return new Text(text, 0, 0)
       }
 
-      if (expanded && isMultiQuery && details.queryResults?.length) {
-        for (const queryResult of details.queryResults.slice(0, 4)) {
-          text += `\n${theme.fg('accent', `• ${truncateText(queryResult.query, 80)}`)}`
-          text += `\n${theme.fg('muted', `  ${queryResult.count} results via ${queryResult.provider}`)}`
-          for (const item of queryResult.results.slice(0, 2)) {
-            text += `\n${theme.fg('dim', `  - ${truncateText(item.title, 96)}`)}`
+      if (details.responseId) {
+        text += `\n${theme.fg('muted', `responseId: ${details.responseId}`)}`
+      }
+
+      if (details.queryResults?.length) {
+        const queriesToShow = details.queryResults.slice(0, 4)
+        for (const [queryIndex, queryResult] of queriesToShow.entries()) {
+          if (isMultiQuery) {
+            text += queryIndex === 0 ? '\n' : '\n\n'
+            text += theme.fg('accent', theme.bold(truncateText(queryResult.query, 100)))
           }
-          if (queryResult.results.length > 2) {
-            text += `\n${theme.fg('muted', `  ... ${queryResult.results.length - 2} more results`)}`
+
+          const resultsToShow = queryResult.results.slice(0, 5)
+          for (const [index, item] of resultsToShow.entries()) {
+            text += `\n${theme.fg('accent', `${index + 1}. ${truncateText(item.title, 100)}`)}`
+            text += `\n${theme.fg('dim', `   ${truncateText(item.url, 120)}`)}`
+            if (item.snippet) {
+              text += `\n${theme.fg('muted', `   ${truncateText(item.snippet, 140)}`)}`
+            }
+          }
+
+          if (queryResult.results.length > resultsToShow.length) {
+            text += `\n${theme.fg('muted', `   ... ${queryResult.results.length - resultsToShow.length} more results`)}`
           }
         }
-        if (details.queryResults.length > 4) {
-          text += `\n${theme.fg('muted', `... ${details.queryResults.length - 4} more queries`)}`
+
+        if (details.queryResults.length > queriesToShow.length) {
+          text += `\n${theme.fg('muted', `... ${details.queryResults.length - queriesToShow.length} more queries`)}`
         }
-      } else if (expanded && details.attempts?.length) {
-        text += `\n${theme.fg('muted', 'Attempts:')}`
+      }
+
+      if (details.attempts?.length) {
+        text += `\n\n${theme.fg('muted', 'Attempts:')}`
         for (const attempt of details.attempts) {
           const icon = attempt.ok
             ? theme.fg('success', '✓')
@@ -506,17 +529,7 @@ export function createWebSearchTool(
         }
       }
 
-      if (expanded && !isMultiQuery && details.results?.length) {
-        for (const item of details.results.slice(0, 5)) {
-          text += `\n${theme.fg('accent', `• ${item.title}`)}`
-          text += `\n${theme.fg('dim', `  ${truncateText(item.url, 120)}`)}`
-        }
-        if (details.results.length > 5) {
-          text += `\n${theme.fg('muted', `... ${details.results.length - 5} more results`)}`
-        }
-      }
-
-      if (expanded && details.tempFile) {
+      if (details.tempFile) {
         text += `\n${theme.fg('muted', `Full output: ${details.tempFile}`)}`
       }
 

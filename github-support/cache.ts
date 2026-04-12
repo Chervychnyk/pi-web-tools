@@ -247,3 +247,14 @@ export async function ensureGitHubClone(
     }
   }
 }
+
+export function cleanupGitHubCache() {
+  IN_FLIGHT_CLONES.clear()
+
+  try {
+    const { dir } = resolveGitHubCacheDir()
+    pruneGitHubCacheDir(dir)
+  } catch {
+    // Best-effort — process is exiting.
+  }
+}

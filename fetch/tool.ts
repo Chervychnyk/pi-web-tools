@@ -26,6 +26,7 @@ import {
 } from './content.ts'
 import {
   decodeBodyAsText,
+  decodeContentEncoding,
   extractPdfText,
   fetchViaJinaReader,
   fetchWithOptionalCloudflareRetry,
@@ -418,7 +419,14 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
           )
         }
 
-        const bodyBuffer = response.bodyBuffer
+        const bodyBuffer = decodeContentEncoding(
+          response.bodyBuffer,
+          response.headers.get('content-encoding'),
+          {
+            url: finalUrl,
+            mimeType,
+          },
+        )
         const bodySize = bodyBuffer.byteLength
 
         emitFetchProgress(
