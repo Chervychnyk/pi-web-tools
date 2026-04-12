@@ -26,26 +26,32 @@ It intentionally avoids the heavier workflow/orchestration surface from `pi-web-
 
 ## Install in Pi
 
-As a local package path in `settings.json`:
+Install directly from git:
+
+```bash
+pi install git@github.com:Chervychnyk/pi-web-tools.git
+```
+
+Or use the HTTPS remote:
+
+```bash
+pi install https://github.com/Chervychnyk/pi-web-tools.git
+```
+
+If you prefer wiring it manually in `settings.json`, reference the git URL instead of a local path:
 
 ```json
 {
-  "extensions": [
-    "../../../code/pi-web-tools"
+  "packages": [
+    "git@github.com:Chervychnyk/pi-web-tools.git"
   ]
 }
 ```
 
-Because this directory is a Pi package, Pi will load:
+Because this repository is a Pi package, Pi will load:
 
 - the extension from `index.ts`
 - skills from `skills/`
-
-If you want to install it directly with Pi instead of wiring settings manually, local path packages are also supported:
-
-```bash
-pi install /Users/$USER/code/pi-web-tools
-```
 
 ## Tools
 
