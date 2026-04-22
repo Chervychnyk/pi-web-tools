@@ -5,58 +5,38 @@ import { Type } from '@sinclair/typebox'
 import { fetchGitHubContent, parseGitHubUrl } from '../github.ts'
 import {
   DEFAULT_TIMEOUT,
-  appendStoredResponseNote,
-  buildCacheKey,
   createAbortController,
   getCachedValue,
-  normalizeWhitespace,
   renderBadges,
   renderToolCallHeader,
-  setCachedValue,
-  truncateForModel,
   truncateText,
 } from '../shared.ts'
-import { tryStoreWebResponse } from '../storage.ts'
+import { classifyFetchResponse } from './classify.ts'
+import { extensionForFormat } from './content.ts'
+import { extractFetchContent } from './extract.ts'
+import { buildFetchCacheKey, parseFetchParams } from './params.ts'
+import { emitFetchProgress } from './progress.ts'
 import {
-  cleanupMarkdown,
-  getTurndownService,
-  extensionForFormat,
-  extractBestHtmlContent,
-  selectFragment,
-} from './content.ts'
+  buildImageFetchResult,
+  buildTextFetchResult,
+  composeFetchTextOutput,
+} from './result.ts'
 import {
-  decodeBodyAsText,
   decodeContentEncoding,
   extractPdfText,
   fetchViaJinaReader,
   fetchWithOptionalCloudflareRetry,
-  isPdfMimeType,
-  isPdfUrl,
-  looksLikeBlockedOrJunkContent,
   MAX_HTML_BYTES,
-  parseContentLength,
   shouldApplyHtmlGuard,
   shouldUseJinaFallbackForStatus,
 } from './network.ts'
 import type {
   FetchDetails,
-  FetchProgressHandler,
+  FetchOutputFormat,
   FetchToolContent,
 } from './types.ts'
 
-const DEFAULT_IMAGE_FORMAT = 'image'
-const FETCH_CACHE_TTL_MS = 10 * 60 * 1000
 const LARGE_RESPONSE_WARNING_BYTES = 1 * 1024 * 1024
-
-function emitFetchProgress(
-  onUpdate: FetchProgressHandler | undefined,
-  stage: string,
-  message: string,
-) {
-  onUpdate?.({
-    content: [{ type: 'text', text: `[${stage}] ${message}` }],
-  })
-}
 
 export type WebFetchDependencies = {
   githubFetcher: typeof fetchGitHubContent
@@ -65,46 +45,84 @@ export type WebFetchDependencies = {
   pdfTextExtractor: typeof extractPdfText
 }
 
-function buildFetchResult(
-  text: string,
-  extension: string,
-  maxChars: number | undefined,
-  cacheKey: string,
-  requestUrl: string,
-  detailOverrides: Omit<FetchDetails, 'truncated' | 'tempFile' | 'charLimited' | 'maxChars' | 'originalChars'>,
-) {
-  const stored = tryStoreWebResponse({
-    kind: 'fetch',
+function canUseTextLikeFetchFormat(format: FetchOutputFormat | undefined) {
+  return format === undefined || format === 'markdown' || format === 'text'
+}
+
+function buildGitHubFetchResult(options: {
+  githubContent: NonNullable<Awaited<ReturnType<typeof fetchGitHubContent>>>
+  requestedFormat: FetchOutputFormat | undefined
+  maxChars: number | undefined
+  cacheKey: string
+  requestUrl: string
+}) {
+  const { githubContent, requestedFormat, maxChars, cacheKey, requestUrl } = options
+  const format = requestedFormat ?? 'markdown'
+
+  return buildTextFetchResult(
+    githubContent.text,
+    '.md',
+    maxChars,
+    cacheKey,
     requestUrl,
-    finalUrl: detailOverrides.url,
-    format: detailOverrides.format,
-    title: detailOverrides.title,
-    contentType: detailOverrides.contentType,
-    messageText: text,
-    ...(detailOverrides.selectedSelector
-      ? { selectedSelector: detailOverrides.selectedSelector }
-      : {}),
-  })
-  const output = truncateForModel(text, extension, maxChars)
-  const result = {
-    content: [
-      {
-        type: 'text' as const,
-        text: appendStoredResponseNote(output.text, stored?.responseId),
-      },
-    ],
-    details: {
-      ...detailOverrides,
-      responseId: stored?.responseId,
-      truncated: output.truncated,
-      tempFile: output.tempFile,
-      charLimited: output.charLimited,
-      maxChars: output.maxChars,
-      originalChars: output.originalChars,
-    } satisfies FetchDetails,
+    {
+      url: githubContent.finalUrl,
+      format,
+      githubType: githubContent.githubType,
+      githubSource: githubContent.githubSource,
+      githubLocalPath: githubContent.githubLocalPath,
+      title: githubContent.title,
+      contentType: githubContent.contentType,
+      cached: false,
+      cacheAgeMs: 0,
+    },
+  )
+}
+
+function validateGitHubRequest(
+  isGitHubUrl: boolean,
+  selector: string | undefined,
+  requestedFormat: FetchOutputFormat | undefined,
+) {
+  if (!isGitHubUrl) return
+
+  if (selector) {
+    throw new Error('Selector is not supported for GitHub repository URLs')
   }
-  setCachedValue(cacheKey, result, FETCH_CACHE_TTL_MS)
-  return result
+  if (!canUseTextLikeFetchFormat(requestedFormat)) {
+    throw new Error(
+      `GitHub repository URLs only support markdown or text output, received: ${requestedFormat}`,
+    )
+  }
+}
+
+function validateResponseCompatibility(options: {
+  selector: string | undefined
+  format: FetchOutputFormat
+  isHtml: boolean
+  isJson: boolean
+  isPdf: boolean
+  mimeType: string
+}) {
+  const { selector, format, isHtml, isJson, isPdf, mimeType } = options
+
+  if (isPdf && selector) {
+    throw new Error('Selector is not supported for PDF output')
+  }
+  if (isPdf && !['markdown', 'text'].includes(format)) {
+    throw new Error(
+      `PDF content only supports markdown or text output, received: ${format}`,
+    )
+  }
+  if (selector && !isHtml) {
+    if (isJson || format === 'json') {
+      throw new Error('Selector is not supported for json output')
+    }
+
+    throw new Error(
+      `Selector is only supported for HTML responses, received: ${mimeType || 'unknown'}`,
+    )
+  }
 }
 
 export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
@@ -160,44 +178,10 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       ),
     }),
     async execute(_toolCallId, params, signal, onUpdate) {
-      const url = params.url.trim()
-      const requestedFormat = params.format
-      const selector = params.selector?.trim() || undefined
-      const timeoutMs = params.timeout ?? DEFAULT_TIMEOUT
-      const maxChars = params.maxChars
-      const refresh = params.refresh ?? false
+      const parsed = parseFetchParams(params)
+      const cacheKey = buildFetchCacheKey(parsed)
 
-      if (!url) throw new Error('URL cannot be empty')
-      if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
-        throw new Error(`Invalid timeout: ${timeoutMs}`)
-      }
-      if (
-        maxChars !== undefined &&
-        (!Number.isInteger(maxChars) || maxChars <= 0)
-      ) {
-        throw new Error(`Invalid maxChars: ${maxChars}`)
-      }
-
-      let parsedUrl: URL
-      try {
-        parsedUrl = new URL(url)
-      } catch {
-        throw new Error(`Invalid URL: ${url}`)
-      }
-
-      if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
-        throw new Error(`Unsupported protocol: ${parsedUrl.protocol}`)
-      }
-
-      const cacheKey = buildCacheKey({
-        tool: 'web_fetch',
-        url,
-        format: requestedFormat ?? '(auto)',
-        selector,
-        maxChars,
-      })
-
-      if (!refresh) {
+      if (!parsed.refresh) {
         const cached = getCachedValue<{
           content: FetchToolContent
           details: FetchDetails
@@ -206,7 +190,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
           emitFetchProgress(
             onUpdate,
             'cache',
-            `Using cached fetch result for ${url}`,
+            `Using cached fetch result for ${parsed.url}`,
           )
           return {
             content: cached.value.content,
@@ -222,66 +206,42 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       emitFetchProgress(
         onUpdate,
         'resolve',
-        `Validating and fetching ${url}...`,
+        `Validating and fetching ${parsed.url}...`,
       )
 
       const { controller, cleanup, rethrowIfAbort } = createAbortController(
-        timeoutMs,
+        parsed.timeoutMs,
         signal,
       )
 
       try {
-        const githubUrl = parseGitHubUrl(url)
-        const githubRequestedFormat = requestedFormat ?? 'markdown'
-
-        const makeGitHubResult = (
-          githubContent: NonNullable<Awaited<ReturnType<typeof githubFetcher>>>,
-          format: 'markdown' | 'text',
-        ) =>
-          buildFetchResult(githubContent.text, '.md', maxChars, cacheKey, url, {
-            url: githubContent.finalUrl,
-            format,
-            githubType: githubContent.githubType,
-            githubSource: githubContent.githubSource,
-            githubLocalPath: githubContent.githubLocalPath,
-            title: githubContent.title,
-            contentType: githubContent.contentType,
-            cached: false,
-            cacheAgeMs: 0,
-          })
-
-        if (githubUrl && selector) {
-          throw new Error(
-            'Selector is not supported for GitHub repository URLs',
-          )
-        }
-        if (
-          githubUrl &&
-          !['markdown', 'text'].includes(githubRequestedFormat)
-        ) {
-          throw new Error(
-            `GitHub repository URLs only support markdown or text output, received: ${githubRequestedFormat}`,
-          )
-        }
+        const githubUrl = parseGitHubUrl(parsed.url)
+        validateGitHubRequest(Boolean(githubUrl), parsed.selector, parsed.requestedFormat)
 
         const githubContent = await githubFetcher(
-          url,
+          parsed.url,
           controller.signal,
           onUpdate,
-          refresh,
+          parsed.refresh,
         )
         if (githubContent) {
-          return makeGitHubResult(githubContent, githubRequestedFormat)
+          return buildGitHubFetchResult({
+            githubContent,
+            requestedFormat: parsed.requestedFormat,
+            maxChars: parsed.maxChars,
+            cacheKey,
+            requestUrl: parsed.url,
+          })
         }
 
         emitFetchProgress(
           onUpdate,
           'network',
-          `Requesting ${parsedUrl.hostname}...`,
+          `Requesting ${parsed.parsedUrl.hostname}...`,
         )
 
         const { response, cloudflareBypassed } = await networkFetcher(
-          parsedUrl,
+          parsed.parsedUrl,
           controller.signal,
           onUpdate,
         )
@@ -293,13 +253,11 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
         )
 
         if (!response.ok) {
-          const nonOkFinalUrl = response.url || parsedUrl.toString()
+          const nonOkFinalUrl = response.url || parsed.parsedUrl.toString()
 
           if (
-            !selector &&
-            (requestedFormat === undefined ||
-              requestedFormat === 'markdown' ||
-              requestedFormat === 'text') &&
+            !parsed.selector &&
+            canUseTextLikeFetchFormat(parsed.requestedFormat) &&
             shouldUseJinaFallbackForStatus(response.status)
           ) {
             const jina = await jinaFetcher(
@@ -307,13 +265,13 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
               controller.signal,
               onUpdate,
             )
-            const jinaFormat = requestedFormat ?? 'markdown'
-            return buildFetchResult(
+            const jinaFormat = parsed.requestedFormat ?? 'markdown'
+            return buildTextFetchResult(
               jina.content,
               extensionForFormat(jinaFormat),
-              maxChars,
+              parsed.maxChars,
               cacheKey,
-              url,
+              parsed.url,
               {
                 url: nonOkFinalUrl,
                 format: jinaFormat,
@@ -327,95 +285,79 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
             )
           }
 
-          throw new Error(
-            `Fetch failed: ${response.status} ${response.statusText}`,
-          )
+          throw new Error(`Fetch failed: ${response.status} ${response.statusText}`)
         }
 
-        const finalUrl = response.url || parsedUrl.toString()
-        const status = response.status
-        const statusText = response.statusText
-        const contentType = (
-          response.headers.get('content-type') || ''
-        ).toLowerCase()
-        const contentLength = parseContentLength(
-          response.headers.get('content-length'),
+        const classification = classifyFetchResponse(
+          response,
+          parsed.parsedUrl,
+          parsed.requestedFormat,
         )
-        const mimeType = contentType.split(';')[0]?.trim() || ''
-        const isHtml =
-          mimeType === 'text/html' || mimeType === 'application/xhtml+xml'
-        const isJson = mimeType.includes('json')
-        const isPdf = isPdfMimeType(mimeType) || isPdfUrl(finalUrl)
-        const isText = isHtml || mimeType.startsWith('text/') || !mimeType
-        const isImage =
-          mimeType.startsWith('image/') && mimeType !== 'image/svg+xml'
-        const format =
-          requestedFormat ?? (isImage ? DEFAULT_IMAGE_FORMAT : 'markdown')
 
-        const redirectedGithubUrl = !githubUrl ? parseGitHubUrl(finalUrl) : null
-        const canUseGithubAfterRedirect =
-          !selector &&
-          (requestedFormat === undefined ||
-            requestedFormat === 'markdown' ||
-            requestedFormat === 'text')
-
-        if (redirectedGithubUrl && canUseGithubAfterRedirect) {
+        const redirectedGithubUrl = !githubUrl
+          ? parseGitHubUrl(classification.finalUrl)
+          : null
+        if (
+          redirectedGithubUrl &&
+          !parsed.selector &&
+          canUseTextLikeFetchFormat(parsed.requestedFormat)
+        ) {
           emitFetchProgress(
             onUpdate,
             'github',
-            `Redirected to GitHub URL, switching to repository extraction for ${finalUrl}`,
+            `Redirected to GitHub URL, switching to repository extraction for ${classification.finalUrl}`,
           )
 
           const redirectedGithubContent = await githubFetcher(
-            finalUrl,
+            classification.finalUrl,
             controller.signal,
             onUpdate,
-            refresh,
+            parsed.refresh,
           )
 
           if (redirectedGithubContent) {
-            return makeGitHubResult(
-              redirectedGithubContent,
-              (requestedFormat ?? 'markdown') as 'markdown' | 'text',
-            )
+            return buildGitHubFetchResult({
+              githubContent: redirectedGithubContent,
+              requestedFormat: parsed.requestedFormat,
+              maxChars: parsed.maxChars,
+              cacheKey,
+              requestUrl: parsed.url,
+            })
           }
         }
 
-        if (isPdf && selector) {
-          throw new Error('Selector is not supported for PDF output')
-        }
-        if (isPdf && !['markdown', 'text'].includes(format)) {
-          throw new Error(
-            `PDF content only supports markdown or text output, received: ${format}`,
-          )
-        }
-        if (selector && !isHtml) {
-          if (isJson || format === 'json') {
-            throw new Error('Selector is not supported for json output')
-          }
-
-          throw new Error(
-            `Selector is only supported for HTML responses, received: ${mimeType || 'unknown'}`,
-          )
-        }
+        validateResponseCompatibility({
+          selector: parsed.selector,
+          format: classification.format,
+          isHtml: classification.isHtml,
+          isJson: classification.isJson,
+          isPdf: classification.isPdf,
+          mimeType: classification.mimeType,
+        })
 
         if (
-          contentLength !== undefined &&
-          contentLength > LARGE_RESPONSE_WARNING_BYTES
+          classification.contentLength !== undefined &&
+          classification.contentLength > LARGE_RESPONSE_WARNING_BYTES
         ) {
           onUpdate?.({
             content: [
               {
                 type: 'text',
-                text: `Large response detected (${formatSize(contentLength)}).`,
+                text: `Large response detected (${formatSize(classification.contentLength)}).`,
               },
             ],
           })
         }
 
-        if (shouldApplyHtmlGuard(mimeType, format, contentLength)) {
+        if (
+          shouldApplyHtmlGuard(
+            classification.mimeType,
+            classification.format,
+            classification.contentLength,
+          )
+        ) {
           throw new Error(
-            `HTML response too large to process safely: ${formatSize(contentLength!)} (max ${formatSize(MAX_HTML_BYTES)})`,
+            `HTML response too large to process safely: ${formatSize(classification.contentLength!)} (max ${formatSize(MAX_HTML_BYTES)})`,
           )
         }
 
@@ -423,8 +365,8 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
           response.bodyBuffer,
           response.headers.get('content-encoding'),
           {
-            url: finalUrl,
-            mimeType,
+            url: classification.finalUrl,
+            mimeType: classification.mimeType,
           },
         )
         const bodySize = bodyBuffer.byteLength
@@ -432,12 +374,12 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
         emitFetchProgress(
           onUpdate,
           'download',
-          `Downloaded ${formatSize(bodySize)} from ${new URL(finalUrl).hostname}`,
+          `Downloaded ${formatSize(bodySize)} from ${new URL(classification.finalUrl).hostname}`,
         )
 
         if (
-          isHtml &&
-          ['markdown', 'text', 'html'].includes(format) &&
+          classification.isHtml &&
+          ['markdown', 'text', 'html'].includes(classification.format) &&
           bodySize > MAX_HTML_BYTES
         ) {
           throw new Error(
@@ -445,167 +387,76 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
           )
         }
 
-        if (isImage || format === 'image') {
-          if (!isImage) {
+        if (classification.isImage || classification.format === 'image') {
+          if (!classification.isImage) {
             throw new Error(
-              `Requested image output but received non-image content type: ${mimeType || 'unknown'}`,
+              `Requested image output but received non-image content type: ${classification.mimeType || 'unknown'}`,
             )
           }
 
-          const summary = `Image fetched successfully: ${finalUrl} (${mimeType}, ${formatSize(bodySize)})`
-          const result = {
-            content: [
-              { type: 'text', text: summary },
-              { type: 'image', data: bodyBuffer.toString('base64'), mimeType },
-            ],
-            details: {
-              responseId: undefined,
-              url: finalUrl,
-              format,
+          return buildImageFetchResult(
+            bodyBuffer,
+            classification.mimeType,
+            classification.finalUrl,
+            classification.format,
+            bodySize,
+            {
+              url: classification.finalUrl,
+              format: classification.format,
               title: null,
-              truncated: false,
-              tempFile: undefined,
+              charLimited: false,
+              maxChars: undefined,
+              originalChars: 0,
               isImage: true,
-              imageMimeType: mimeType,
+              imageMimeType: classification.mimeType,
               imageSize: bodySize,
-              status,
-              statusText,
-              contentType,
-              contentLength,
+              status: classification.status,
+              statusText: classification.statusText,
+              contentType: classification.contentType,
+              contentLength: classification.contentLength ?? bodySize,
               cloudflareBypassed,
               cached: false,
               cacheAgeMs: 0,
-            } satisfies FetchDetails,
-          }
-          setCachedValue(cacheKey, result, FETCH_CACHE_TTL_MS)
-          return result
+            },
+          )
         }
 
-        const raw = decodeBodyAsText(bodyBuffer, contentType)
-        let article: ReturnType<typeof extractBestHtmlContent> | undefined
-        let content = raw
-        let jinaFallbackUsed = false
-        let pdfExtracted = false
+        const extracted = await extractFetchContent({
+          bodyBuffer,
+          classification,
+          selector: parsed.selector,
+          signal: controller.signal,
+          onUpdate,
+          jinaFetcher,
+          pdfTextExtractor,
+        })
 
-        emitFetchProgress(onUpdate, 'process', `Processing ${format} output...`)
-
-        if (format === 'json') {
-          try {
-            content = JSON.stringify(JSON.parse(raw), null, 2)
-          } catch {
-            throw new Error(`Failed to parse response as JSON: ${finalUrl}`)
-          }
-        } else if (format === 'html') {
-          if (selector) {
-            const selection = selectFragment(raw, selector)
-            content = selection.html
-            article = {
-              title: null,
-              byline: null,
-              excerpt: null,
-              siteName: null,
-              contentHtml: selection.html,
-              textContent: selection.text,
-              extractionMethod: 'selector',
-              selectedSelector: selector,
-            }
-          }
-        } else if (format === 'text' || format === 'markdown') {
-          if (isPdf) {
-            emitFetchProgress(
-              onUpdate,
-              'extract',
-              'Extracting text from PDF...',
-            )
-            content = normalizeWhitespace(
-              await pdfTextExtractor(bodyBuffer, controller.signal),
-            )
-            pdfExtracted = true
-          } else if (isHtml) {
-            emitFetchProgress(
-              onUpdate,
-              'extract',
-              selector
-                ? `Selecting ${selector}...`
-                : format === 'markdown'
-                  ? 'Extracting readable article...'
-                  : 'Extracting main text...',
-            )
-            article = extractBestHtmlContent(raw, finalUrl, selector)
-
-            if (format === 'markdown') {
-              emitFetchProgress(
-                onUpdate,
-                'convert',
-                'Converting HTML to markdown...',
-              )
-              content = cleanupMarkdown(
-                getTurndownService().turndown(article.contentHtml),
-              )
-            } else {
-              content = article.textContent
-            }
-
-            if (!selector && looksLikeBlockedOrJunkContent(content)) {
-              const jina = await jinaFetcher(
-                new URL(finalUrl),
-                controller.signal,
-                onUpdate,
-              )
-              content = jina.content
-              article = undefined
-              jinaFallbackUsed = true
-            }
-          } else if (isText || isJson) {
-            content = format === 'text' ? normalizeWhitespace(raw) : raw.trim()
-          } else {
-            throw new Error(
-              `Unsupported content type for ${format} output: ${contentType || 'unknown'}`,
-            )
-          }
-        } else {
-          throw new Error(`Unsupported format: ${format}`)
-        }
-
-        const messageParts: string[] = []
-        if (article?.title && format !== 'json' && format !== 'html') {
-          messageParts.push(`# ${article.title}`)
-        }
-        if (article?.byline && format !== 'json' && format !== 'html') {
-          messageParts.push(`By: ${article.byline}`)
-        }
-        if (article?.siteName && format !== 'json' && format !== 'html') {
-          messageParts.push(`Site: ${article.siteName}`)
-        }
-        if (article?.excerpt && format === 'markdown') {
-          messageParts.push(`> ${article.excerpt}`)
-        }
-        if (messageParts.length > 0) {
-          messageParts.push('')
-        }
-        const fullText = [...messageParts, content].join('\n')
-        return buildFetchResult(
-          fullText,
-          extensionForFormat(format),
-          maxChars,
+        return buildTextFetchResult(
+          composeFetchTextOutput(
+            classification.format,
+            extracted.content,
+            extracted.article,
+          ),
+          extensionForFormat(classification.format),
+          parsed.maxChars,
           cacheKey,
-          url,
+          parsed.url,
           {
-            url: finalUrl,
-            format,
-            title: article?.title,
-            byline: article?.byline,
-            siteName: article?.siteName,
-            excerpt: article?.excerpt,
-            selectedSelector: article?.selectedSelector,
-            extractionMethod: article?.extractionMethod,
-            status,
-            statusText,
-            contentType,
-            contentLength: contentLength ?? bodySize,
+            url: classification.finalUrl,
+            format: classification.format,
+            title: extracted.article?.title,
+            byline: extracted.article?.byline,
+            siteName: extracted.article?.siteName,
+            excerpt: extracted.article?.excerpt,
+            selectedSelector: extracted.article?.selectedSelector,
+            extractionMethod: extracted.article?.extractionMethod,
+            status: classification.status,
+            statusText: classification.statusText,
+            contentType: classification.contentType,
+            contentLength: classification.contentLength ?? bodySize,
             cloudflareBypassed,
-            jinaFallbackUsed,
-            pdfExtracted,
+            jinaFallbackUsed: extracted.jinaFallbackUsed,
+            pdfExtracted: extracted.pdfExtracted,
             cached: false,
             cacheAgeMs: 0,
           },

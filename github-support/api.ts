@@ -1,10 +1,14 @@
 import type { GitHubFetchResult, GitHubUrlInfo } from './types.ts'
 import {
-  MAX_TREE_ENTRIES,
-  MAX_INLINE_FILE_CHARS,
   isProbablyBinaryPath,
   isProbablyBinaryBuffer,
 } from './constants.ts'
+import {
+  formatGitHubInlineText,
+  renderGitHubApiBlobText,
+  renderGitHubApiRootText,
+  renderGitHubApiTreeText,
+} from './render.ts'
 
 const GITHUB_API_BASE_URL = 'https://api.github.com'
 const GITHUB_API_CONTENT_TYPE = 'text/x-github-repository-api'
@@ -116,13 +120,25 @@ async function resolveRef(info: GitHubUrlInfo, signal?: AbortSignal) {
   return repo?.default_branch
 }
 
-function formatTreeEntries(entries: string[]) {
-  if (!entries.length) return '(empty repository tree)'
-  const truncated = entries.length > MAX_TREE_ENTRIES
-  const sliced = entries.slice(0, MAX_TREE_ENTRIES)
-  return truncated
-    ? `${sliced.join('\n')}\n... (${entries.length} total entries)`
-    : sliced.join('\n')
+function previewReadmeText(readmeText: string) {
+  return readmeText.length > README_PREVIEW_CHARS
+    ? `${readmeText.slice(0, README_PREVIEW_CHARS)}\n\n[README truncated at ${README_PREVIEW_CHARS} characters]`
+    : readmeText
+}
+
+function formatDirectoryListing(entries: GitHubApiContentDirectoryEntry[]) {
+  if (!entries.length) return ['(empty directory)']
+
+  const sorted = [...entries].sort((left, right) =>
+    (left.name || '').localeCompare(right.name || ''),
+  )
+
+  return sorted.map((entry) => {
+    const name = entry.name || '(unknown)'
+    if (entry.type === 'dir') return `- ${name}/`
+    if (entry.type === 'file') return `- ${name} (${entry.size ?? 0} bytes)`
+    return `- ${name} (${entry.type || 'unknown'})`
+  })
 }
 
 async function fetchRootText(info: GitHubUrlInfo, ref: string, signal?: AbortSignal) {
@@ -149,43 +165,12 @@ async function fetchRootText(info: GitHubUrlInfo, ref: string, signal?: AbortSig
 
   if (!treeEntries.length && !readmeText) return undefined
 
-  const lines = [
-    `# ${info.owner}/${info.repo}`,
-    '',
-    `GitHub repository: https://github.com/${info.owner}/${info.repo}`,
-    `Source: GitHub API fallback (no local clone)`,
-  ]
-
-  if (readmeText) {
-    const preview =
-      readmeText.length > README_PREVIEW_CHARS
-        ? `${readmeText.slice(0, README_PREVIEW_CHARS)}\n\n[README truncated at ${README_PREVIEW_CHARS} characters]`
-        : readmeText
-    lines.push('', '## README', '', preview.trim())
-  }
-
-  if (treeEntries.length) {
-    lines.push('', '## Tree', '', formatTreeEntries(treeEntries))
-  }
-
-  return lines.join('\n')
-}
-
-function formatDirectoryListing(entries: GitHubApiContentDirectoryEntry[]) {
-  if (!entries.length) return '(empty directory)'
-
-  const sorted = [...entries].sort((left, right) =>
-    (left.name || '').localeCompare(right.name || ''),
+  return renderGitHubApiRootText(
+    info,
+    `https://github.com/${info.owner}/${info.repo}`,
+    readmeText ? previewReadmeText(readmeText).trim() : undefined,
+    treeEntries,
   )
-
-  const lines = sorted.map((entry) => {
-    const name = entry.name || '(unknown)'
-    if (entry.type === 'dir') return `- ${name}/`
-    if (entry.type === 'file') return `- ${name} (${entry.size ?? 0} bytes)`
-    return `- ${name} (${entry.type || 'unknown'})`
-  })
-
-  return formatTreeEntries(lines)
 }
 
 async function fetchTreeText(
@@ -204,27 +189,24 @@ async function fetchTreeText(
 
   if (!content) return undefined
 
-  const lines = [
-    `# ${info.owner}/${info.repo}`,
-    '',
-    `GitHub directory: https://github.com/${info.owner}/${info.repo}/tree/${ref}${repoPath ? `/${repoPath}` : ''}`,
-    `Source: GitHub API fallback (no local clone)`,
-    '',
-    `## ${repoPath || '.'}`,
-    '',
-  ]
-
   if (Array.isArray(content)) {
-    lines.push(formatDirectoryListing(content))
-    return lines.join('\n')
+    return renderGitHubApiTreeText(
+      info,
+      `https://github.com/${info.owner}/${info.repo}/tree/${ref}${repoPath ? `/${repoPath}` : ''}`,
+      repoPath,
+      formatDirectoryListing(content),
+    )
   }
 
   if (content.type === 'dir') {
-    lines.push(`(directory listing unavailable for ${repoPath || '.'})`)
-    return lines.join('\n')
+    return renderGitHubApiTreeText(
+      info,
+      `https://github.com/${info.owner}/${info.repo}/tree/${ref}${repoPath ? `/${repoPath}` : ''}`,
+      repoPath,
+      [`(directory listing unavailable for ${repoPath || '.'})`],
+    )
   }
 
-  // If path resolves to a file, reuse blob rendering.
   return fetchBlobText(
     {
       ...info,
@@ -266,38 +248,21 @@ async function fetchBlobText(
     inlineText = await fetchGitHubApiText(content.download_url, signal)
   }
 
-  if (inlineText === undefined) {
-    const binaryLabel = isProbablyBinaryPath(repoPath)
-      ? 'Binary file detected'
-      : 'File content is not available as UTF-8 text'
-
-    return [
-      `# ${info.owner}/${info.repo}`,
-      '',
-      `GitHub file: https://github.com/${info.owner}/${info.repo}/blob/${ref}/${repoPath}`,
-      `Source: GitHub API fallback (no local clone)`,
-      '',
-      `## ${repoPath}`,
-      '',
-      `${binaryLabel}${typeof content.size === 'number' ? ` (${content.size} bytes)` : ''}.`,
-    ].join('\n')
-  }
-
   const body =
-    inlineText.length > MAX_INLINE_FILE_CHARS
-      ? `${inlineText.slice(0, MAX_INLINE_FILE_CHARS)}\n\n---\n[File truncated: showing first ${MAX_INLINE_FILE_CHARS} of ${inlineText.length} characters]`
-      : inlineText
+    inlineText === undefined
+      ? `${
+          isProbablyBinaryPath(repoPath)
+            ? 'Binary file detected'
+            : 'File content is not available as UTF-8 text'
+        }${typeof content.size === 'number' ? ` (${content.size} bytes)` : ''}.`
+      : formatGitHubInlineText(inlineText)
 
-  return [
-    `# ${info.owner}/${info.repo}`,
-    '',
-    `GitHub file: https://github.com/${info.owner}/${info.repo}/blob/${ref}/${repoPath}`,
-    `Source: GitHub API fallback (no local clone)`,
-    '',
-    `## ${repoPath}`,
-    '',
+  return renderGitHubApiBlobText(
+    info,
+    `https://github.com/${info.owner}/${info.repo}/blob/${ref}/${repoPath}`,
+    repoPath,
     body,
-  ].join('\n')
+  )
 }
 
 export async function fetchGitHubContentViaApi(

@@ -13,6 +13,40 @@ export type ArticleData = {
   selectedSelector?: string
 }
 
+export type FetchOutputFormat = 'markdown' | 'text' | 'html' | 'json' | 'image'
+
+export type ParsedFetchParams = {
+  url: string
+  parsedUrl: URL
+  requestedFormat?: FetchOutputFormat
+  selector?: string
+  timeoutMs: number
+  maxChars?: number
+  refresh: boolean
+}
+
+export type FetchResponseClassification = {
+  finalUrl: string
+  status: number
+  statusText: string
+  contentType: string
+  contentLength?: number
+  mimeType: string
+  isHtml: boolean
+  isJson: boolean
+  isPdf: boolean
+  isText: boolean
+  isImage: boolean
+  format: FetchOutputFormat
+}
+
+export type ExtractedFetchContent = {
+  content: string
+  article?: ArticleData
+  jinaFallbackUsed: boolean
+  pdfExtracted: boolean
+}
+
 export type FetchDetails = {
   responseId?: string
   url: string

@@ -17,6 +17,7 @@ const CONTENT_SELECTOR_CANDIDATES = [
   '.article',
   '.markdown-body',
 ]
+const SELECTOR_FALLBACK_MIN_TEXT_LENGTH = 280
 
 type SelectorFragment = { html: string; text: string; selector: string }
 
@@ -41,7 +42,8 @@ export function selectFragment(html: string, selector: string): SelectorFragment
   return selectFragmentWith$(cheerio.load(html), selector)
 }
 
-function findBestContentSelector($: cheerio.CheerioAPI): SelectorFragment | null {
+function findBestContentSelector(html: string): SelectorFragment | null {
+  const $ = cheerio.load(html)
   let best: SelectorFragment | null = null
 
   for (const selector of CONTENT_SELECTOR_CANDIDATES) {
@@ -59,7 +61,16 @@ function findBestContentSelector($: cheerio.CheerioAPI): SelectorFragment | null
   return best
 }
 
-function extractReadableArticle(dom: JSDOM): ArticleData {
+export function extractHtmlTitle(html: string) {
+  try {
+    return new JSDOM(html).window.document.title?.trim() || null
+  } catch {
+    return null
+  }
+}
+
+function extractReadableArticle(html: string, url: string): ArticleData {
+  const dom = new JSDOM(html, { url })
   const article = new Readability(dom.window.document).parse()
   const fallbackHtml = dom.window.document.body?.innerHTML || ''
   const fallbackText = normalizeWhitespace(
@@ -82,13 +93,10 @@ export function extractBestHtmlContent(
   url: string,
   selector?: string,
 ): ArticleData {
-  const $ = cheerio.load(html)
-
   if (selector) {
-    const selected = selectFragmentWith$($, selector)
-    const title = $('title').first().text()?.trim() || null
+    const selected = selectFragment(html, selector)
     return {
-      title,
+      title: extractHtmlTitle(html),
       byline: null,
       excerpt: null,
       siteName: null,
@@ -99,26 +107,18 @@ export function extractBestHtmlContent(
     }
   }
 
-  const dom = new JSDOM(html, { url })
-  const article = extractReadableArticle(dom)
-  const bestSelector = findBestContentSelector($)
-
-  if (!bestSelector) {
+  const article = extractReadableArticle(html, url)
+  if (article.textContent.length >= SELECTOR_FALLBACK_MIN_TEXT_LENGTH) {
     return article
   }
 
-  const readabilityLength = article.textContent.length
-  const selectorLength = bestSelector.text.length
-  const shouldPreferSelector =
-    selectorLength > 0 &&
-    (readabilityLength < 280 || selectorLength > readabilityLength * 1.2)
-
-  if (!shouldPreferSelector) {
+  const bestSelector = findBestContentSelector(html)
+  if (!bestSelector || bestSelector.text.length <= article.textContent.length) {
     return article
   }
 
   return {
-    title: article.title || dom.window.document.title?.trim() || null,
+    title: article.title || extractHtmlTitle(html),
     byline: article.byline,
     excerpt: article.excerpt,
     siteName: article.siteName,

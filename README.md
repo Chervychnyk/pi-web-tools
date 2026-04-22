@@ -64,8 +64,9 @@ Features:
 - single `query` or batched `queries`
 - provider fallback
 - per-query result limits
+- compact inline previews for batched searches to reduce token usage
 - cached responses
-- persisted `responseId` storage
+- persisted `responseId` storage for full follow-up retrieval
 
 Example:
 
@@ -138,7 +139,8 @@ Guides Pi toward using:
 - `github-support/` — GitHub cache, CLI, URL parsing, and rendering internals
 - `providers/` — web search providers
 - `skills/` — bundled Pi skills
-- `tests.ts` — local structural and mocked execute-path tests
+- `tests.ts` — local test runner
+- `tests/` — focused structural and mocked execute-path tests by subsystem
 
 ## Local development
 
@@ -156,6 +158,7 @@ Notes:
 - runtime PDF extraction prefers `pdftotext` and falls back to JS-based extraction via `unpdf`
 - GitHub repository fetches prefer local clones via `git`; `gh` is used when available for auth-aware clone/ref operations
 - commit-SHA GitHub URLs and clone failures automatically fall back to GitHub API views
+- ambiguous GitHub branch/tag paths are only resolved via remote metadata after an initial direct attempt fails
 
 ## Configuration
 
@@ -182,6 +185,9 @@ Cache/storage environment variables:
 
 Behavior notes:
 
+- batched `web_search` responses intentionally return a compact inline preview; use `responseId` + `get_web_content` for the full stored result set
+- `web_fetch` always stores full text responses when possible, then trims/truncates inline output for model safety
+- in-memory caching is intentionally biased toward smaller text responses; large text payloads and image responses are not memoized in RAM
 - if no explicit storage dir is configured and `~/.pi/cache/web-tools` is unavailable, the package falls back to a writable cache directory under the system temp directory
 - GitHub clones are refreshed automatically when stale, and old clone caches are pruned over time
 - stored response files are pruned by both count and age

@@ -27,6 +27,10 @@ const TOOL_CACHE = new Map<
   string,
   { value: unknown; storedAt: number; expiresAt: number }
 >()
+const WRITABLE_CACHE_DIR_CACHE = new Map<
+  string,
+  { dir: string; fallbackUsed: boolean; attempted: string[] }
+>()
 
 export type TruncationResult = {
   text: string
@@ -265,14 +269,19 @@ function canUseCacheDir(dir: string) {
 
 export function resolveWritableCacheDir(options: CacheDirOptions) {
   const candidates = getCacheDirCandidates(options)
+  const cacheKey = candidates.join('\u0000')
+  const cached = WRITABLE_CACHE_DIR_CACHE.get(cacheKey)
+  if (cached) return cached
 
   for (const [index, dir] of candidates.entries()) {
     if (!canUseCacheDir(dir)) continue
-    return {
+    const resolved = {
       dir,
       fallbackUsed: index > 0,
       attempted: candidates,
     }
+    WRITABLE_CACHE_DIR_CACHE.set(cacheKey, resolved)
+    return resolved
   }
 
   throw new Error(

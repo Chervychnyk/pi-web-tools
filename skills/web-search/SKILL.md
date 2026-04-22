@@ -14,7 +14,7 @@ Search the web for current information and documentation using the `web_search` 
 Use `web_search` with a single `query` when you need current docs, news, release notes, or API information.
 
 - Search first, then use `web_fetch` to read a specific result URL.
-- Keep `limit` small (default 5) unless the user asks for broad exploration.
+- Prefer `limit: 3` unless the user explicitly wants broad exploration.
 - Results include titles, URLs, and snippets — often enough to answer without fetching.
 
 ### Deep research with multiple angles
@@ -23,7 +23,7 @@ Use `web_search` with `queries` (2-6) when a single query won't cover the topic.
 
 - Each query should be a distinct search angle, not a rephrasing of the same question.
 - Example: researching a library might need queries for "docs", "changelog", and "migration guide".
-- Results are grouped per query in the output.
+- Multi-query runs return a compact inline preview per query to save tokens; use `responseId` / `get_web_content` for the full stored result set.
 
 ### Browse stored results
 
@@ -38,6 +38,7 @@ When `web_search` returns a `responseId`, use `get_web_content` to page through 
 - Results are cached for 5 minutes. Use `refresh: true` to bypass the cache and force a fresh search.
 - Provider is auto-detected from environment (Brave, Kagi, Google, SearXNG, DuckDuckGo fallback). Override with `provider` parameter.
 - After finding a relevant URL, use `web_fetch` to retrieve the full page content.
+- When a search looks large, prefer browsing it via `get_web_content` instead of rerunning with a larger `limit`.
 
 ## Tool reference
 

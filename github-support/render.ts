@@ -19,6 +19,7 @@ import {
   isProbablyBinaryPath,
   isProbablyBinaryBuffer,
 } from './constants.ts'
+
 const README_CANDIDATES = [
   'README.md',
   'readme.md',
@@ -27,6 +28,24 @@ const README_CANDIDATES = [
   'README.txt',
 ]
 const IGNORED_TREE_NAMES = new Set(['.git'])
+const API_FALLBACK_SOURCE = 'GitHub API fallback (no local clone)'
+
+type GitHubRenderContext = {
+  info: GitHubUrlInfo
+  url: string
+  locationLabel?: string
+  locationValue?: string
+  sourceNote?: string
+}
+
+function appendLocation(lines: string[], context: GitHubRenderContext) {
+  if (context.locationLabel && context.locationValue) {
+    lines.push(`${context.locationLabel}: ${context.locationValue}`)
+  }
+  if (context.sourceNote) {
+    lines.push(`Source: ${context.sourceNote}`)
+  }
+}
 
 export function resolveWithinRepo(rootPath: string, relativePath = '') {
   const normalizedRoot = path.resolve(rootPath)
@@ -82,7 +101,7 @@ function findReadme(rootPath: string) {
   return undefined
 }
 
-function buildTree(rootPath: string, relativePath = '') {
+function collectTreeEntries(rootPath: string, relativePath = '') {
   const startPath = resolveWithinRepo(rootPath, relativePath)
   if (!startPath || !existsSync(startPath)) {
     throw new Error(`Path not found in repository: ${relativePath || '.'}`)
@@ -122,90 +141,76 @@ function buildTree(rootPath: string, relativePath = '') {
   }
 
   walk(startPath, relativePath, 0)
-
-  if (!entries.length) return '(empty directory)'
-  if (entries.length >= MAX_TREE_ENTRIES) {
-    entries.push(`... truncated after ${MAX_TREE_ENTRIES} entries`)
-  }
-  return entries.join('\n')
+  return entries
 }
 
-function buildRootText(info: GitHubUrlInfo, localPath: string, url: string) {
+export function formatGitHubTreeEntries(entries: string[]) {
+  if (!entries.length) return '(empty directory)'
+  const visibleEntries = entries.slice(0, MAX_TREE_ENTRIES)
+  if (entries.length <= MAX_TREE_ENTRIES) return visibleEntries.join('\n')
+  return `${visibleEntries.join('\n')}\n... truncated after ${MAX_TREE_ENTRIES} entries`
+}
+
+export function formatGitHubInlineText(text: string) {
+  return text.length > MAX_INLINE_FILE_CHARS
+    ? `${text.slice(0, MAX_INLINE_FILE_CHARS)}\n\n---\n[File truncated: showing first ${MAX_INLINE_FILE_CHARS} of ${text.length} characters]`
+    : text
+}
+
+export function renderGitHubRootText(
+  context: GitHubRenderContext & {
+    readmeText?: string
+    treeText: string
+  },
+) {
   const lines = [
-    `# ${info.owner}/${info.repo}`,
+    `# ${context.info.owner}/${context.info.repo}`,
     '',
-    `GitHub repository: ${url}`,
-    `Local path: ${localPath}`,
+    `GitHub repository: ${context.url}`,
   ]
 
-  const readmePath = findReadme(localPath)
-  if (readmePath) {
-    lines.push('', '## README', '', readUtf8(readmePath).trim())
+  appendLocation(lines, context)
+
+  if (context.readmeText) {
+    lines.push('', '## README', '', context.readmeText.trim())
   }
 
-  lines.push('', '## Tree', '', buildTree(localPath))
+  lines.push('', '## Tree', '', context.treeText)
   return lines.join('\n')
 }
 
-function buildTreeText(info: GitHubUrlInfo, localPath: string, url: string) {
-  const repoPath = info.path || ''
-  const resolved = resolveWithinRepo(localPath, repoPath)
-  if (!resolved || !existsSync(resolved)) {
-    throw new Error(`Repository path not found: ${repoPath}`)
-  }
+export function renderGitHubTreeText(
+  context: GitHubRenderContext & {
+    repoPath: string
+    treeText: string
+  },
+) {
+  const lines = [
+    `# ${context.info.owner}/${context.info.repo}`,
+    '',
+    `GitHub directory: ${context.url}`,
+  ]
 
-  return [
-    `# ${info.owner}/${info.repo}`,
-    '',
-    `GitHub directory: ${url}`,
-    `Local path: ${resolved}`,
-    '',
-    `## ${repoPath || '.'}`,
-    '',
-    buildTree(localPath, repoPath),
-  ].join('\n')
+  appendLocation(lines, context)
+  lines.push('', `## ${context.repoPath || '.'}`, '', context.treeText)
+  return lines.join('\n')
 }
 
-function buildBlobText(info: GitHubUrlInfo, localPath: string, url: string) {
-  const repoPath = info.path || ''
-  const resolved = resolveWithinRepo(localPath, repoPath)
-  if (!resolved || !existsSync(resolved)) {
-    throw new Error(`Repository file not found: ${repoPath}`)
-  }
-
-  const stats = statSync(resolved)
-  if (!stats.isFile()) {
-    throw new Error(`Repository path is not a file: ${repoPath}`)
-  }
-
-  if (isProbablyBinaryFile(resolved)) {
-    return [
-      `# ${info.owner}/${info.repo}`,
-      '',
-      `GitHub file: ${url}`,
-      `Local path: ${resolved}`,
-      '',
-      `Binary file detected: ${repoPath}`,
-      `Size: ${stats.size} bytes`,
-    ].join('\n')
-  }
-
-  const text = readUtf8(resolved)
-  const inlineText =
-    text.length > MAX_INLINE_FILE_CHARS
-      ? `${text.slice(0, MAX_INLINE_FILE_CHARS)}\n\n---\n[File truncated: showing first ${MAX_INLINE_FILE_CHARS} of ${text.length} characters]`
-      : text
-
-  return [
-    `# ${info.owner}/${info.repo}`,
+export function renderGitHubBlobText(
+  context: GitHubRenderContext & {
+    repoPath: string
+    body: string
+  },
+) {
+  const lines = [
+    `# ${context.info.owner}/${context.info.repo}`,
     '',
-    `GitHub file: ${url}`,
-    `Local path: ${resolved}`,
-    '',
-    `## ${repoPath}`,
-    '',
-    inlineText,
-  ].join('\n')
+    `GitHub file: ${context.url}`,
+  ]
+
+  appendLocation(lines, context)
+  lines.push('', `## ${context.repoPath}`, '', context.body)
+  return lines.join('\n')
 }
 
 export function buildGitHubContentText(
@@ -213,11 +218,102 @@ export function buildGitHubContentText(
   localPath: string,
   url: string,
 ) {
-  return info.type === 'root'
-    ? buildRootText(info, localPath, url)
-    : info.type === 'tree'
-      ? buildTreeText(info, localPath, url)
-      : buildBlobText(info, localPath, url)
+  if (info.type === 'root') {
+    const readmePath = findReadme(localPath)
+    return renderGitHubRootText({
+      info,
+      url,
+      locationLabel: 'Local path',
+      locationValue: localPath,
+      readmeText: readmePath ? readUtf8(readmePath) : undefined,
+      treeText: formatGitHubTreeEntries(collectTreeEntries(localPath)),
+    })
+  }
+
+  const repoPath = info.path || ''
+  const resolved = resolveWithinRepo(localPath, repoPath)
+  if (!resolved || !existsSync(resolved)) {
+    throw new Error(
+      `Repository ${info.type === 'tree' ? 'path' : 'file'} not found: ${repoPath}`,
+    )
+  }
+
+  if (info.type === 'tree') {
+    return renderGitHubTreeText({
+      info,
+      url,
+      locationLabel: 'Local path',
+      locationValue: resolved,
+      repoPath,
+      treeText: formatGitHubTreeEntries(collectTreeEntries(localPath, repoPath)),
+    })
+  }
+
+  const stats = statSync(resolved)
+  if (!stats.isFile()) {
+    throw new Error(`Repository path is not a file: ${repoPath}`)
+  }
+
+  const body = isProbablyBinaryFile(resolved)
+    ? [
+        `Binary file detected: ${repoPath}`,
+        `Size: ${stats.size} bytes`,
+      ].join('\n')
+    : formatGitHubInlineText(readUtf8(resolved))
+
+  return renderGitHubBlobText({
+    info,
+    url,
+    locationLabel: 'Local path',
+    locationValue: resolved,
+    repoPath,
+    body,
+  })
+}
+
+export function renderGitHubApiRootText(
+  info: GitHubUrlInfo,
+  url: string,
+  readmeText: string | undefined,
+  treeEntries: string[],
+) {
+  return renderGitHubRootText({
+    info,
+    url,
+    sourceNote: API_FALLBACK_SOURCE,
+    readmeText,
+    treeText: formatGitHubTreeEntries(treeEntries),
+  })
+}
+
+export function renderGitHubApiTreeText(
+  info: GitHubUrlInfo,
+  url: string,
+  repoPath: string,
+  treeEntries: string[],
+) {
+  return renderGitHubTreeText({
+    info,
+    url,
+    sourceNote: API_FALLBACK_SOURCE,
+    repoPath,
+    treeText: formatGitHubTreeEntries(treeEntries),
+  })
+}
+
+export function renderGitHubApiBlobText(
+  info: GitHubUrlInfo,
+  url: string,
+  repoPath: string,
+  body: string,
+) {
+  return renderGitHubBlobText({
+    info,
+    url,
+    sourceNote: API_FALLBACK_SOURCE,
+    repoPath,
+    body,
+  })
 }
 
 export function renderGitHubCloneStatus(

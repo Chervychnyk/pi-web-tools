@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
 import { Text } from '@mariozechner/pi-tui'
 import { Type } from '@sinclair/typebox'
+import { formatStoredSearchResponseText } from './search-format.ts'
 import { renderBadges, renderToolCallHeader, truncateForModel, truncateText } from './shared.ts'
 import {
   DEFAULT_CONTENT_SLICE_LIMIT,
@@ -42,41 +43,10 @@ function resolveSearchQuerySelection(
     throw new Error('Use either query or queryIndex, not both')
   }
 
-  if (queryIndex !== undefined) {
-    if (!Number.isInteger(queryIndex) || queryIndex < 0) {
-      throw new Error(`Invalid queryIndex: ${queryIndex}`)
-    }
-
-    const selected = stored.queryResults[queryIndex]
-    if (!selected) {
-      throw new Error(
-        `queryIndex ${queryIndex} is out of range for responseId ${stored.responseId}`,
-      )
-    }
-
-    return {
-      text: selected.messageText,
-      selectedQuery: selected.query,
-    }
-  }
-
-  if (query) {
-    const selected = stored.queryResults.find((item) => item.query === query)
-    if (!selected) {
-      throw new Error(
-        `Query not found in stored response: ${query}. Available queries: ${stored.queries.join(', ')}`,
-      )
-    }
-
-    return {
-      text: selected.messageText,
-      selectedQuery: selected.query,
-    }
-  }
-
-  return {
-    text: stored.messageText,
-  }
+  return formatStoredSearchResponseText(stored, {
+    query,
+    queryIndex,
+  })
 }
 
 function renderContinuationHint(details: GetWebContentDetails) {

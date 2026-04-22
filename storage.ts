@@ -24,6 +24,11 @@ const DEFAULT_MAX_STORED_RESPONSE_AGE_MS = 14 * 24 * 60 * 60 * 1000
 export const DEFAULT_CONTENT_SLICE_LIMIT = 200
 export const MAX_CONTENT_SLICE_LIMIT = 1000
 
+const STORAGE_ROOT_CACHE = new Map<
+  string,
+  ReturnType<typeof resolveWritableCacheDir>
+>()
+
 export type StoredSearchAttempt = {
   provider: string
   ok: boolean
@@ -40,7 +45,7 @@ export type StoredSearchQuery = {
   attempts: StoredSearchAttempt[]
   fallbackUsed: boolean
   durationMs: number
-  messageText: string
+  messageText?: string
 }
 
 export type StoredSearchResponse = {
@@ -50,7 +55,7 @@ export type StoredSearchResponse = {
   requestedProvider: string
   queries: string[]
   queryResults: StoredSearchQuery[]
-  messageText: string
+  messageText?: string
 }
 
 export type StoredFetchResponse = {
@@ -87,6 +92,13 @@ function getXdgStorageRoot(env: NodeJS.ProcessEnv = process.env) {
   return path.join(path.resolve(env.XDG_CACHE_HOME), 'pi', 'web-tools')
 }
 
+function getStorageRootCacheKey(env: NodeJS.ProcessEnv) {
+  return [
+    env.PI_WEB_TOOLS_STORAGE_DIR || '',
+    env.XDG_CACHE_HOME || '',
+  ].join('\u0000')
+}
+
 export function getStorageRootCandidates(env: NodeJS.ProcessEnv = process.env) {
   return getCacheDirCandidates({
     explicitDir: env.PI_WEB_TOOLS_STORAGE_DIR,
@@ -97,12 +109,18 @@ export function getStorageRootCandidates(env: NodeJS.ProcessEnv = process.env) {
 }
 
 export function resolveStorageRoot(env: NodeJS.ProcessEnv = process.env) {
-  return resolveWritableCacheDir({
+  const cacheKey = getStorageRootCacheKey(env)
+  const cached = STORAGE_ROOT_CACHE.get(cacheKey)
+  if (cached) return cached
+
+  const resolved = resolveWritableCacheDir({
     explicitDir: env.PI_WEB_TOOLS_STORAGE_DIR,
     defaultDir: DEFAULT_WEB_TOOLS_CACHE_DIR,
     xdgDir: getXdgStorageRoot(env),
     fallbackDir: FALLBACK_WEB_TOOLS_CACHE_DIR,
   })
+  STORAGE_ROOT_CACHE.set(cacheKey, resolved)
+  return resolved
 }
 
 function getResponsesDirForRoot(root: string) {

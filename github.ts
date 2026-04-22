@@ -12,34 +12,40 @@ import { parseGitHubUrl, resolveGitHubRefPath } from './github-support/url.ts'
 export type { GitHubFetchResult, GitHubUrlInfo } from './github-support/types.ts'
 export { isGitHubCacheStale, parseGitHubUrl, pruneGitHubCacheDir, resolveGitHubRefPath, resolveWithinRepo }
 
-export async function fetchGitHubContent(
-  url: string,
+function isResolvableRefPath(info: GitHubUrlInfo) {
+  return (
+    info.type !== 'root' &&
+    !info.refIsFullSha &&
+    Boolean(info.refPathSegments && info.refPathSegments.length > 1)
+  )
+}
+
+function buildCanonicalGitHubUrl(info: GitHubUrlInfo, fallbackUrl: string) {
+  return info.type === 'root'
+    ? fallbackUrl
+    : `https://github.com/${info.owner}/${info.repo}/${info.type}/${info.ref}${info.path ? `/${info.path}` : ''}`
+}
+
+export async function resolveGitHubFetchInfo(
+  info: GitHubUrlInfo,
+  signal?: AbortSignal,
+  resolver: typeof resolveGitHubUrlInfo = resolveGitHubUrlInfo,
+) {
+  if (!isResolvableRefPath(info)) return info
+  return resolver(info, signal)
+}
+
+async function fetchGitHubContentWithInfo(
+  info: GitHubUrlInfo,
+  requestedUrl: string,
   signal?: AbortSignal,
   onUpdate?: (update: { content: Array<{ type: 'text'; text: string }> }) => void,
   refresh = false,
 ): Promise<GitHubFetchResult | null> {
-  const info = parseGitHubUrl(url)
-  if (!info) return null
+  const finalUrl = buildCanonicalGitHubUrl(info, requestedUrl)
+  let cloneInfo = info
 
-  onUpdate?.({
-    content: [{ type: 'text', text: `[github] Resolving ${info.owner}/${info.repo}...` }],
-  })
-
-  let resolvedInfo: GitHubUrlInfo = info
-  try {
-    resolvedInfo = await resolveGitHubUrlInfo(info, signal)
-  } catch {
-    // Continue with best-effort parsed info.
-  }
-
-  const finalUrl =
-    resolvedInfo.type === 'root'
-      ? url
-      : `https://github.com/${resolvedInfo.owner}/${resolvedInfo.repo}/${resolvedInfo.type}/${resolvedInfo.ref}${resolvedInfo.path ? `/${resolvedInfo.path}` : ''}`
-
-  let cloneInfo = resolvedInfo
-
-  if (resolvedInfo.refIsFullSha) {
+  if (info.refIsFullSha) {
     onUpdate?.({
       content: [
         {
@@ -49,7 +55,7 @@ export async function fetchGitHubContent(
       ],
     })
 
-    const apiResult = await fetchGitHubContentViaApi(finalUrl, resolvedInfo, signal)
+    const apiResult = await fetchGitHubContentViaApi(finalUrl, info, signal)
     if (apiResult) return apiResult
 
     onUpdate?.({
@@ -62,7 +68,7 @@ export async function fetchGitHubContent(
     })
 
     cloneInfo = {
-      ...resolvedInfo,
+      ...info,
       ref: undefined,
       refIsFullSha: false,
     }
@@ -81,8 +87,8 @@ export async function fetchGitHubContent(
       ],
     })
 
-    let text = buildGitHubContentText(cloneInfo, clone.localPath, url)
-    if (resolvedInfo.refIsFullSha) {
+    let text = buildGitHubContentText(cloneInfo, clone.localPath, requestedUrl)
+    if (info.refIsFullSha) {
       text = [
         '⚠️ Requested commit-SHA URL could not be fetched via GitHub API.',
         'Showing best-effort content from the default branch clone instead.',
@@ -117,4 +123,44 @@ export async function fetchGitHubContent(
 
   if (cloneError) throw cloneError
   return null
+}
+
+export async function fetchGitHubContent(
+  url: string,
+  signal?: AbortSignal,
+  onUpdate?: (update: { content: Array<{ type: 'text'; text: string }> }) => void,
+  refresh = false,
+): Promise<GitHubFetchResult | null> {
+  const info = parseGitHubUrl(url)
+  if (!info) return null
+
+  onUpdate?.({
+    content: [{ type: 'text', text: `[github] Resolving ${info.owner}/${info.repo}...` }],
+  })
+
+  let resolvedInfo = info
+  if (isResolvableRefPath(info)) {
+    onUpdate?.({
+      content: [
+        {
+          type: 'text',
+          text: '[github] Resolving branch/tag metadata...',
+        },
+      ],
+    })
+
+    try {
+      resolvedInfo = await resolveGitHubFetchInfo(info, signal)
+    } catch {
+      // Continue with the parsed info as a best effort when remote ref resolution fails.
+    }
+  }
+
+  return fetchGitHubContentWithInfo(
+    resolvedInfo,
+    buildCanonicalGitHubUrl(resolvedInfo, url),
+    signal,
+    onUpdate,
+    refresh,
+  )
 }

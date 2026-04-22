@@ -17,6 +17,7 @@ Use `web_fetch` with `format: "markdown"` (default) or `"text"` to extract reada
 - JS-heavy or blocked pages automatically fall back through Jina Reader.
 - Use `selector` (CSS selector) to extract a specific region, e.g. `article`, `main`, `#content`. Only works for HTML/XHTML responses.
 - Pair with `web_search` when you need to discover the right URL first.
+- For pages that may be long, set `maxChars` on the initial fetch and use `get_web_content` if you need the full stored text later.
 
 ### Fetch structured data
 
@@ -36,6 +37,7 @@ When `web_fetch` returns a `responseId`, use `get_web_content` to page through t
 - `get_web_content({ responseId })` — retrieve the stored result.
 - `offset` / `limit` — page through long content (default 200 lines per page).
 - Large responses are truncated with full output saved to a temp file.
+- Prefer paging stored content over repeatedly refetching the same long page.
 
 ## Behavior notes
 
@@ -43,6 +45,7 @@ When `web_fetch` returns a `responseId`, use `get_web_content` to page through t
 - Very large HTML responses (>5MB) are rejected to avoid expensive parsing.
 - Images are auto-detected by content type and returned inline.
 - `selector` only works for HTML/XHTML. It does not work for JSON, PDF, images, or plain text.
+- Large text fetches are stored in full but may use compact inline output to protect context size.
 
 ## Tool reference
 
