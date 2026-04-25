@@ -1,6 +1,7 @@
 import { formatSize } from '@mariozechner/pi-coding-agent'
+import { randomUUID } from 'node:crypto'
 import * as dns from 'node:dns/promises'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import * as http from 'node:http'
 import * as https from 'node:https'
 import net from 'node:net'
@@ -10,6 +11,7 @@ import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'n
 import { execFileAsync, normalizeHostname, normalizeWhitespace } from '../shared.ts'
 import type {
   FetchProgressHandler,
+  FetchRequestOptions,
   GuardedFetchResponse,
   GuardedRequester,
 } from './types.ts'
@@ -159,16 +161,140 @@ const safeLookup = (hostname: string, options: any, callback: any) => {
     .catch((error) => callback(error))
 }
 
+function resolveValidatedProxyUrl(proxyUrl: string): Promise<URL> {
+  let parsedProxyUrl: URL
+
+  try {
+    parsedProxyUrl = new URL(proxyUrl)
+  } catch {
+    throw new Error(`Invalid proxy URL: ${proxyUrl}`)
+  }
+
+  if (
+    !['http:', 'https:', 'socks:', 'socks4:', 'socks5:'].includes(
+      parsedProxyUrl.protocol,
+    )
+  ) {
+    throw new Error(
+      `Unsupported proxy protocol: ${parsedProxyUrl.protocol}. Use http, https, or socks proxies.`,
+    )
+  }
+
+  if (!parsedProxyUrl.hostname) {
+    throw new Error(`Invalid proxy URL hostname: ${proxyUrl}`)
+  }
+
+  return resolvePublicAddress(parsedProxyUrl.hostname).then(() => parsedProxyUrl)
+}
+
+function isAttachmentDisposition(contentDisposition: string) {
+  return /^attachment(?:\s*;|\s*$)/i.test(contentDisposition.trim())
+}
+
+function isTextLikeMimeType(mimeType: string) {
+  if (!mimeType) return true
+
+  return (
+    mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'text/json' ||
+    mimeType.endsWith('+json') ||
+    mimeType === 'application/xml' ||
+    mimeType === 'text/xml' ||
+    mimeType.endsWith('+xml') ||
+    mimeType === 'application/javascript' ||
+    mimeType === 'application/x-javascript' ||
+    mimeType === 'application/ecmascript' ||
+    mimeType === 'image/svg+xml'
+  )
+}
+
+function shouldStreamBinaryResponse(contentDisposition: string, mimeType: string) {
+  if (isAttachmentDisposition(contentDisposition)) return true
+  if (!mimeType) return false
+  if (mimeType.startsWith('image/')) return false
+  if (isPdfMimeType(mimeType)) return false
+  return !isTextLikeMimeType(mimeType)
+}
+
+function resolveStreamedDownloadPath(url: URL, mimeType: string) {
+  const baseDir = path.join(tmpdir(), 'pi-web-tools-downloads')
+  mkdirSync(baseDir, { recursive: true })
+
+  const extFromUrl = path.extname(url.pathname)
+  const ext = extFromUrl || (mimeType === 'application/zip' ? '.zip' : '.bin')
+  const filename = `download-${Date.now().toString(36)}-${randomUUID().slice(0, 8)}${ext}`
+  return path.join(baseDir, filename)
+}
+
+type ProxyAgentLike = new (proxyUrl: string) => http.Agent
+
+let proxyAgentConstructorPromise: Promise<ProxyAgentLike> | undefined
+
+async function loadProxyAgentConstructor(): Promise<ProxyAgentLike> {
+  if (!proxyAgentConstructorPromise) {
+    proxyAgentConstructorPromise = import('proxy-agent')
+      .then((module) => {
+        const candidate =
+          (module as { ProxyAgent?: unknown }).ProxyAgent ??
+          (module as { default?: unknown }).default
+
+        if (typeof candidate !== 'function') {
+          throw new Error('proxy-agent module does not export ProxyAgent')
+        }
+
+        return candidate as ProxyAgentLike
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(`Proxy support is unavailable: ${message}`)
+      })
+  }
+
+  return proxyAgentConstructorPromise
+}
+
 async function requestWithDnsGuard(
   url: URL,
   signal: AbortSignal,
   userAgent: string,
+  options: FetchRequestOptions = {},
 ): Promise<GuardedFetchResponse> {
   assertSafeFetchUrl(url)
 
   const client = url.protocol === 'https:' ? https : http
   const acceptHeader =
     'text/html,application/xhtml+xml,application/json,text/plain;q=0.9,image/*;q=0.9,*/*;q=0.8'
+  const requestHeaders = {
+    'User-Agent': userAgent,
+    Accept: acceptHeader,
+    'Accept-Encoding': ACCEPT_ENCODING_HEADER,
+    ...options.headers,
+  }
+  const proxyUrl = options.proxy?.trim()
+  const parsedProxyUrl = proxyUrl
+    ? await resolveValidatedProxyUrl(proxyUrl)
+    : undefined
+
+  if (parsedProxyUrl) {
+    await resolvePublicAddress(url.hostname)
+  }
+
+  const requestOptions: http.RequestOptions = {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port || undefined,
+    path: `${url.pathname}${url.search}`,
+    headers: requestHeaders,
+    signal,
+  }
+
+  if (parsedProxyUrl) {
+    const ProxyAgent = await loadProxyAgentConstructor()
+    requestOptions.agent = new ProxyAgent(parsedProxyUrl.toString())
+  } else {
+    requestOptions.lookup = safeLookup
+  }
 
   return new Promise((resolve, reject) => {
     let settled = false
@@ -183,25 +309,15 @@ async function requestWithDnsGuard(
       resolve(value)
     }
 
-    const request = client.request(
-      {
-        protocol: url.protocol,
-        hostname: url.hostname,
-        port: url.port || undefined,
-        path: `${url.pathname}${url.search}`,
-        headers: {
-          'User-Agent': userAgent,
-          Accept: acceptHeader,
-          'Accept-Encoding': ACCEPT_ENCODING_HEADER,
-        },
-        lookup: safeLookup,
-        signal,
-      },
-      (response) => {
+    const request = client.request(requestOptions, (response) => {
         const rawContentType = response.headers['content-type']
         const contentType = Array.isArray(rawContentType)
           ? rawContentType[0] || ''
           : rawContentType || ''
+        const rawContentDisposition = response.headers['content-disposition']
+        const contentDisposition = Array.isArray(rawContentDisposition)
+          ? rawContentDisposition[0] || ''
+          : rawContentDisposition || ''
         const mimeType = contentType.split(';')[0]?.trim().toLowerCase() || ''
         const maxBytes = getResponseByteLimit(mimeType)
         const rawContentLength = response.headers['content-length']
@@ -224,8 +340,81 @@ async function requestWithDnsGuard(
           return
         }
 
-        const chunks: Buffer[] = []
+        const buildHeaders = () => {
+          const headers = new Headers()
+          for (const [key, value] of Object.entries(response.headers)) {
+            if (Array.isArray(value)) headers.set(key, value.join(', '))
+            else if (value !== undefined) headers.set(key, String(value))
+          }
+          return headers
+        }
+
+        const shouldStreamToFile = shouldStreamBinaryResponse(
+          contentDisposition,
+          mimeType,
+        )
+
         let totalBytes = 0
+
+        if (shouldStreamToFile) {
+          const downloadedFilePath = resolveStreamedDownloadPath(url, mimeType)
+          const output = createWriteStream(downloadedFilePath, {
+            flags: 'wx',
+            mode: 0o600,
+          })
+
+          const cleanupPartial = () => {
+            rmSync(downloadedFilePath, { force: true })
+          }
+
+          response.on('data', (chunk) => {
+            if (settled) return
+
+            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+            totalBytes += buffer.byteLength
+            if (totalBytes > maxBytes) {
+              const error = createResponseTooLargeError(
+                url,
+                totalBytes,
+                maxBytes,
+                mimeType,
+              )
+              response.destroy(error)
+              request.destroy(error)
+              output.destroy(error)
+              cleanupPartial()
+              rejectOnce(error)
+            }
+          })
+
+          response.on('error', (error) => {
+            cleanupPartial()
+            rejectOnce(error)
+          })
+          output.on('error', (error) => {
+            cleanupPartial()
+            rejectOnce(error)
+          })
+          output.on('finish', () => {
+            const headers = buildHeaders()
+            const status = response.statusCode ?? 0
+            resolveOnce({
+              url: url.toString(),
+              status,
+              statusText: response.statusMessage ?? '',
+              headers,
+              ok: status >= 200 && status < 300,
+              bodyBuffer: Buffer.alloc(0),
+              downloadedFilePath,
+              downloadedFileSize: totalBytes,
+            })
+          })
+
+          response.pipe(output)
+          return
+        }
+
+        const chunks: Buffer[] = []
 
         response.on('data', (chunk) => {
           if (settled) return
@@ -249,11 +438,7 @@ async function requestWithDnsGuard(
         })
         response.on('error', rejectOnce)
         response.on('end', () => {
-          const headers = new Headers()
-          for (const [key, value] of Object.entries(response.headers)) {
-            if (Array.isArray(value)) headers.set(key, value.join(', '))
-            else if (value !== undefined) headers.set(key, String(value))
-          }
+          const headers = buildHeaders()
 
           try {
             let bodyBuffer = Buffer.concat(chunks)
@@ -302,11 +487,12 @@ export async function fetchWithRedirects(
   signal: AbortSignal,
   userAgent: string,
   requester: GuardedRequester = requestWithDnsGuard,
+  options?: FetchRequestOptions,
 ): Promise<GuardedFetchResponse> {
   let currentUrl = new URL(initialUrl.toString())
 
   for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
-    const response = await requester(currentUrl, signal, userAgent)
+    const response = await requester(currentUrl, signal, userAgent, options)
     if (!isRedirectStatus(response.status)) return response
 
     const location = response.headers.get('location')
@@ -336,8 +522,15 @@ export async function fetchWithOptionalCloudflareRetry(
   signal: AbortSignal,
   onUpdate?: FetchProgressHandler,
   requester: GuardedRequester = requestWithDnsGuard,
+  options?: FetchRequestOptions,
 ) {
-  let response = await fetchWithRedirects(url, signal, FETCH_USER_AGENT, requester)
+  let response = await fetchWithRedirects(
+    url,
+    signal,
+    FETCH_USER_AGENT,
+    requester,
+    options,
+  )
   let cloudflareBypassed = false
 
   if (isCloudflareChallenge(response)) {
@@ -355,6 +548,7 @@ export async function fetchWithOptionalCloudflareRetry(
       signal,
       FETCH_USER_AGENT_FALLBACK,
       requester,
+      options,
     )
   }
 
@@ -691,6 +885,7 @@ export async function fetchViaJinaReader(
   signal: AbortSignal,
   onUpdate?: FetchProgressHandler,
   requester: GuardedRequester = requestWithDnsGuard,
+  options?: Pick<FetchRequestOptions, 'proxy'>,
 ) {
   onUpdate?.({
     content: [
@@ -706,6 +901,7 @@ export async function fetchViaJinaReader(
     signal,
     FETCH_USER_AGENT,
     requester,
+    options,
   )
 
   if (!response.ok) {

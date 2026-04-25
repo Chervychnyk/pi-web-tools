@@ -6,6 +6,7 @@ It provides:
 
 - `web_search`
 - `web_fetch`
+- `batch_web_fetch`
 - `get_web_content`
 - bundled skills:
   - `web-search`
@@ -84,11 +85,14 @@ Features:
 - `markdown`, `text`, `html`, `json`, `image`
 - Readability extraction
 - CSS selector extraction
+- optional custom `headers` and `proxy`
+- structured error metadata (`code`, `phase`, `retryable`) in failure messages
 - GitHub-aware repo/tree/blob handling (local clone first, GitHub API fallback for commit-SHA URLs and clone failures)
 - automatic switch to GitHub extraction when a non-GitHub URL redirects to github.com
 - Jina Reader fallback for blocked markdown/text fetches
 - PDF extraction via `pdftotext` with JS fallback (`unpdf`)
 - persisted `responseId` storage
+- binary/attachment download mode streamed to temp files (`filePath`, `fileSize`, `fileName`)
 - streamed download guards with per-content-type byte caps
 
 Examples:
@@ -96,7 +100,38 @@ Examples:
 ```ts
 web_fetch({ url: "https://example.com/article" })
 web_fetch({ url: "https://github.com/owner/repo" })
-web_fetch({ url: "https://example.com/spec.pdf", format: "text" })
+web_fetch({
+  url: "https://api.example.com/private",
+  format: "json",
+  headers: { Authorization: "Bearer <token>" },
+})
+web_fetch({
+  url: "https://example.com/spec.pdf",
+  format: "text",
+  proxy: "http://proxy.example:8080",
+})
+web_fetch({ url: "https://example.com/release.zip" }) // downloads to temp file and returns metadata
+```
+
+### `batch_web_fetch`
+
+Fetch multiple URLs with bounded concurrency. Each request accepts the same
+parameters as `web_fetch`.
+
+The tool streams partial progress with per-item status rows and returns final
+per-item outcome metadata.
+
+Examples:
+
+```ts
+batch_web_fetch({
+  requests: [
+    { url: "https://example.com/a", format: "markdown" },
+    { url: "https://example.com/b", format: "text" },
+    { url: "https://api.example.com/c", format: "json", headers: { Authorization: "Bearer <token>" } },
+  ],
+  concurrency: 3,
+})
 ```
 
 ### `get_web_content`
@@ -125,13 +160,14 @@ Guides Pi toward using:
 Guides Pi toward using:
 
 - `web_fetch`
+- `batch_web_fetch`
 - `get_web_content`
 
 ## Package layout
 
 - `index.ts` — extension entrypoint
 - `web-search.ts` — `web_search`
-- `web-fetch.ts` — public `web_fetch` exports + registration
+- `web-fetch.ts` — public `web_fetch` / `batch_web_fetch` exports + registration
 - `fetch/` — web fetch internals (network guards, extraction, tool implementation, shared fetch types)
 - `get-web-content.ts` — stored-content retrieval
 - `storage.ts` — persisted response store
@@ -186,12 +222,13 @@ Cache/storage environment variables:
 Behavior notes:
 
 - batched `web_search` responses intentionally return a compact inline preview; use `responseId` + `get_web_content` for the full stored result set
-- `web_fetch` always stores full text responses when possible, then trims/truncates inline output for model safety
+- `web_fetch` and `batch_web_fetch` store full text responses when possible, then trim/truncate inline output for model safety
 - in-memory caching is intentionally biased toward smaller text responses; large text payloads and image responses are not memoized in RAM
 - if no explicit storage dir is configured and `~/.pi/cache/web-tools` is unavailable, the package falls back to a writable cache directory under the system temp directory
 - GitHub clones are refreshed automatically when stale, and old clone caches are pruned over time
 - stored response files are pruned by both count and age
 - explicit cache dirs are respected as-is; fallback paths are only used when no explicit dir is configured
+- proxy endpoints are security-validated and must resolve to public addresses (localhost/private/link-local proxies are rejected)
 
 ## Storage and cache
 

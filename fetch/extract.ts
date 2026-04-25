@@ -17,6 +17,7 @@ import type {
   ExtractedFetchContent,
   FetchOutputFormat,
   FetchProgressHandler,
+  FetchRequestOptions,
   FetchResponseClassification,
 } from './types.ts'
 
@@ -32,6 +33,7 @@ export async function extractFetchContent(
     selector?: string
     signal: AbortSignal
     onUpdate?: FetchProgressHandler
+    requestOptions?: Pick<FetchRequestOptions, 'proxy'>
   } & FetchExtractorDependencies,
 ): Promise<ExtractedFetchContent> {
   const {
@@ -42,6 +44,7 @@ export async function extractFetchContent(
     onUpdate,
     jinaFetcher,
     pdfTextExtractor,
+    requestOptions,
   } = options
 
   const raw = decodeBodyAsText(bodyBuffer, classification.contentType)
@@ -107,6 +110,8 @@ export async function extractFetchContent(
           new URL(classification.finalUrl),
           signal,
           onUpdate,
+          undefined,
+          requestOptions,
         )
         content = jina.content
         article = undefined

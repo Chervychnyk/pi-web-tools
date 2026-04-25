@@ -16,6 +16,7 @@ export function classifyFetchResponse(
   const status = response.status
   const statusText = response.statusText
   const contentType = (response.headers.get('content-type') || '').toLowerCase()
+  const contentDisposition = response.headers.get('content-disposition') || ''
   const contentLength = parseContentLength(
     response.headers.get('content-length'),
   )
@@ -27,6 +28,14 @@ export function classifyFetchResponse(
   const isText = isHtml || mimeType.startsWith('text/') || !mimeType
   const isImage =
     mimeType.startsWith('image/') && mimeType !== 'image/svg+xml'
+  const isAttachment = /^attachment(?:\s*;|$)/i.test(contentDisposition)
+  const isBinary =
+    !isText &&
+    !isJson &&
+    !isHtml &&
+    !isPdf &&
+    !isImage &&
+    !(mimeType === '' && !isAttachment)
   const format =
     requestedFormat ?? (isImage ? DEFAULT_IMAGE_FORMAT : 'markdown')
 
@@ -35,6 +44,7 @@ export function classifyFetchResponse(
     status,
     statusText,
     contentType,
+    contentDisposition,
     contentLength,
     mimeType,
     isHtml,
@@ -42,6 +52,8 @@ export function classifyFetchResponse(
     isPdf,
     isText,
     isImage,
+    isAttachment,
+    isBinary,
     format,
   }
 }

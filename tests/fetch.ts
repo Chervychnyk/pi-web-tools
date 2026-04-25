@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { Buffer } from 'node:buffer'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib'
 import {
   buildJinaReaderUrl,
+  createBatchWebFetchTool,
   createWebFetchTool,
   decodeBodyAsText,
   decodeContentEncoding,
@@ -126,6 +130,32 @@ async function testMockedFetchFlows() {
   )
 }
 
+async function testProxyEndpointValidation() {
+  await assert.rejects(
+    () =>
+      fetchWithOptionalCloudflareRetry(
+        new URL('https://example.com/docs'),
+        new AbortController().signal,
+        undefined,
+        undefined,
+        { proxy: 'http://localhost:8080' },
+      ),
+    /Blocked hostname: localhost/,
+  )
+
+  await assert.rejects(
+    () =>
+      fetchWithOptionalCloudflareRetry(
+        new URL('https://example.com/docs'),
+        new AbortController().signal,
+        undefined,
+        undefined,
+        { proxy: 'http://127.0.0.1:8080' },
+      ),
+    /Blocked private network address: 127\.0\.0\.1/,
+  )
+}
+
 async function testAbortHandling() {
   const controller = new AbortController()
   const abortingRequester: GuardedRequester = async (_url, signal) => {
@@ -216,7 +246,12 @@ async function testWebFetchExecutePaths() {
         undefined,
         undefined,
       ),
-    /Fetch failed: 403/,
+    (error: any) => {
+      assert.match(String(error?.message), /Fetch failed: 403/)
+      assert.match(String(error?.message), /\[web_fetch_error\]/)
+      assert.match(String(error?.message), /code=http_error/)
+      return true
+    },
   )
 
   await assert.rejects(
@@ -344,6 +379,61 @@ async function testWebFetchExecutePaths() {
   assert.equal((pdfResult.details as any).pdfExtracted, true)
   assert.match((pdfResult.content[0] as any).text, /PDF body text/)
 
+  let receivedHeaders: Record<string, string> | undefined
+  let receivedProxy: string | undefined
+  const requestOptionsTool = createWebFetchTool({
+    githubFetcher: async () => null,
+    networkFetcher: async (_url, _signal, _onUpdate, _requester, options) => {
+      receivedHeaders = options?.headers
+      receivedProxy = options?.proxy
+      return {
+        response: {
+          ...createResponse('https://example.com/options', 200, {
+            'content-type': 'text/plain; charset=utf-8',
+          }),
+          bodyBuffer: Buffer.from('request options body', 'utf8'),
+        },
+        cloudflareBypassed: false,
+      }
+    },
+    jinaFetcher: async () => ({
+      response: createResponse('https://r.jina.ai/http://example.com', 200),
+      content: 'unexpected',
+    }),
+    pdfTextExtractor: async () => 'unused',
+  })
+
+  await requestOptionsTool.execute(
+    'tool-options',
+    {
+      url: 'https://example.com/options',
+      headers: {
+        Authorization: 'Bearer token',
+        'X-Test-Header': 'hello',
+      },
+      proxy: 'http://proxy.example:8080',
+    },
+    undefined,
+    undefined,
+  )
+  assert.equal(receivedHeaders?.Authorization, 'Bearer token')
+  assert.equal(receivedHeaders?.['X-Test-Header'], 'hello')
+  assert.equal(receivedProxy, 'http://proxy.example:8080/')
+
+  await assert.rejects(
+    () =>
+      requestOptionsTool.execute(
+        'tool-options-invalid-proxy',
+        {
+          url: 'https://example.com/options',
+          proxy: 'ftp://proxy.example:21',
+        },
+        undefined,
+        undefined,
+      ),
+    /Unsupported proxy protocol/,
+  )
+
   const compressedTool = createWebFetchTool({
     githubFetcher: async () => null,
     networkFetcher: async () => ({
@@ -463,6 +553,213 @@ async function testWebFetchExecutePaths() {
     undefined,
   )
   assert.equal(junkFallbackUrl, 'https://example.com/final-page')
+}
+
+async function testBatchWebFetchExecutePaths() {
+  const batchTool = createBatchWebFetchTool({
+    githubFetcher: async () => null,
+    networkFetcher: async (url) => {
+      if (url.toString().includes('failure')) {
+        return {
+          response: createResponse(url.toString(), 500, {
+            'content-type': 'text/html; charset=utf-8',
+          }),
+          cloudflareBypassed: false,
+        }
+      }
+
+      return {
+        response: {
+          ...createResponse(url.toString(), 200, {
+            'content-type': 'text/plain; charset=utf-8',
+          }),
+          bodyBuffer: Buffer.from(`content for ${url.toString()}`, 'utf8'),
+        },
+        cloudflareBypassed: false,
+      }
+    },
+    jinaFetcher: async () => ({
+      response: createResponse('https://r.jina.ai/http://example.com', 200),
+      content: 'unexpected',
+    }),
+    pdfTextExtractor: async () => 'unused',
+  })
+
+  const batchResult = await batchTool.execute(
+    'batch-tool-1',
+    {
+      requests: [
+        { url: 'https://example.com/alpha', format: 'text' },
+        { url: 'https://example.com/failure', format: 'html' },
+        { url: 'https://example.com/gamma', format: 'markdown' },
+      ],
+      concurrency: 2,
+    },
+    undefined,
+    undefined,
+  )
+
+  const details = batchResult.details as {
+    total: number
+    succeeded: number
+    failed: number
+    completed: number
+    concurrency: number
+    items: Array<{
+      status: string
+      errorCode?: string
+      errorPhase?: string
+      retryable?: boolean
+    }>
+  }
+
+  assert.equal(details.total, 3)
+  assert.equal(details.completed, 3)
+  assert.equal(details.succeeded, 2)
+  assert.equal(details.failed, 1)
+  assert.equal(details.concurrency, 2)
+  assert.equal(details.items.length, 3)
+  assert.equal(details.items.filter((item) => item.status === 'done').length, 2)
+  assert.equal(details.items.filter((item) => item.status === 'error').length, 1)
+
+  const failedItem = details.items.find((item) => item.status === 'error')
+  assert.equal(failedItem?.errorCode, 'http_error')
+  assert.equal(failedItem?.errorPhase, 'response')
+  assert.equal(failedItem?.retryable, true)
+}
+
+async function testBinaryDownloadMode() {
+  const binaryTool = createWebFetchTool({
+    githubFetcher: async () => null,
+    networkFetcher: async () => ({
+      response: {
+        ...createResponse('https://example.com/archive', 200, {
+          'content-type': 'application/octet-stream',
+          'content-disposition': 'attachment; filename="archive.bin"',
+        }),
+        bodyBuffer: Buffer.from([10, 20, 30, 40, 50]),
+      },
+      cloudflareBypassed: false,
+    }),
+    jinaFetcher: async () => ({
+      response: createResponse('https://r.jina.ai/http://example.com', 200),
+      content: 'unexpected',
+    }),
+    pdfTextExtractor: async () => 'unused',
+  })
+
+  const result = await binaryTool.execute(
+    'tool-binary-1',
+    { url: 'https://example.com/archive' },
+    undefined,
+    undefined,
+  )
+
+  const details = result.details as {
+    isFile?: boolean
+    filePath?: string
+    fileName?: string
+    fileSize?: number
+  }
+
+  assert.equal(details.isFile, true)
+  assert.equal(details.fileName, 'archive.bin')
+  assert.equal(details.fileSize, 5)
+  assert.ok(details.filePath)
+  assert.equal(existsSync(details.filePath!), true)
+  assert.deepEqual(readFileSync(details.filePath!), Buffer.from([10, 20, 30, 40, 50]))
+
+  rmSync(details.filePath!, { force: true })
+}
+
+async function testPreDownloadedFileReuse() {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'pi-web-tools-pre-'))
+  const existingFilePath = path.join(tempDir, 'existing.bin')
+  writeFileSync(existingFilePath, Buffer.from([1, 2, 3]))
+
+  const tool = createWebFetchTool({
+    githubFetcher: async () => null,
+    networkFetcher: async () => ({
+      response: {
+        ...createResponse('https://example.com/existing', 200, {
+          'content-type': 'application/octet-stream',
+          'content-disposition': 'attachment; filename="existing.bin"',
+        }),
+        bodyBuffer: Buffer.alloc(0),
+        downloadedFilePath: existingFilePath,
+        downloadedFileSize: 3,
+      },
+      cloudflareBypassed: false,
+    }),
+    jinaFetcher: async () => ({
+      response: createResponse('https://r.jina.ai/http://example.com', 200),
+      content: 'unexpected',
+    }),
+    pdfTextExtractor: async () => 'unused',
+  })
+
+  const result = await tool.execute(
+    'tool-pre-downloaded',
+    { url: 'https://example.com/existing' },
+    undefined,
+    undefined,
+  )
+
+  const details = result.details as {
+    isFile?: boolean
+    filePath?: string
+    fileName?: string
+    fileSize?: number
+  }
+
+  assert.equal(details.isFile, true)
+  assert.equal(details.filePath, existingFilePath)
+  assert.equal(details.fileName, 'existing.bin')
+  assert.equal(details.fileSize, 3)
+
+  rmSync(tempDir, { recursive: true, force: true })
+}
+
+async function testDownloadedFileCleanupOnNonOkResponse() {
+  const tempDir = mkdtempSync(path.join(tmpdir(), 'pi-web-tools-leak-'))
+  const leakedFilePath = path.join(tempDir, 'leak.bin')
+  writeFileSync(leakedFilePath, Buffer.from([99, 100, 101]))
+
+  const tool = createWebFetchTool({
+    githubFetcher: async () => null,
+    networkFetcher: async () => ({
+      response: {
+        ...createResponse('https://example.com/failed-download', 418, {
+          'content-type': 'application/octet-stream',
+          'content-disposition': 'attachment; filename="failed.bin"',
+        }),
+        ok: false,
+        bodyBuffer: Buffer.alloc(0),
+        downloadedFilePath: leakedFilePath,
+        downloadedFileSize: 3,
+      },
+      cloudflareBypassed: false,
+    }),
+    jinaFetcher: async () => ({
+      response: createResponse('https://r.jina.ai/http://example.com', 200),
+      content: 'unexpected',
+    }),
+    pdfTextExtractor: async () => 'unused',
+  })
+
+  await assert.rejects(
+    () =>
+      tool.execute(
+        'tool-download-cleanup-non-ok',
+        { url: 'https://example.com/failed-download' },
+        undefined,
+        undefined,
+      ),
+    /Fetch failed: 418/,
+  )
+
+  assert.equal(existsSync(leakedFilePath), false)
+  rmSync(tempDir, { recursive: true, force: true })
 }
 
 async function testImagesBypassInMemoryCache() {
@@ -610,9 +907,14 @@ function testFetchGuardHelpers() {
 
 export async function runFetchTests() {
   await testMockedFetchFlows()
+  await testProxyEndpointValidation()
   await testAbortHandling()
   await testPdfHelpers()
   await testWebFetchExecutePaths()
+  await testBatchWebFetchExecutePaths()
+  await testBinaryDownloadMode()
+  await testPreDownloadedFileReuse()
+  await testDownloadedFileCleanupOnNonOkResponse()
   await testImagesBypassInMemoryCache()
   testJinaHelpers()
   testResponseDecodingHelpers()

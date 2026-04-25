@@ -15,6 +15,11 @@ export type ArticleData = {
 
 export type FetchOutputFormat = 'markdown' | 'text' | 'html' | 'json' | 'image'
 
+export type FetchRequestOptions = {
+  headers?: Record<string, string>
+  proxy?: string
+}
+
 export type ParsedFetchParams = {
   url: string
   parsedUrl: URL
@@ -23,6 +28,13 @@ export type ParsedFetchParams = {
   timeoutMs: number
   maxChars?: number
   refresh: boolean
+  headers?: Record<string, string>
+  proxy?: string
+}
+
+export type ParsedBatchFetchParams = {
+  requests: ParsedFetchParams[]
+  concurrency: number
 }
 
 export type FetchResponseClassification = {
@@ -30,6 +42,7 @@ export type FetchResponseClassification = {
   status: number
   statusText: string
   contentType: string
+  contentDisposition: string
   contentLength?: number
   mimeType: string
   isHtml: boolean
@@ -37,6 +50,8 @@ export type FetchResponseClassification = {
   isPdf: boolean
   isText: boolean
   isImage: boolean
+  isAttachment: boolean
+  isBinary: boolean
   format: FetchOutputFormat
 }
 
@@ -46,6 +61,24 @@ export type ExtractedFetchContent = {
   jinaFallbackUsed: boolean
   pdfExtracted: boolean
 }
+
+export type FetchErrorCode =
+  | 'invalid_request'
+  | 'network_error'
+  | 'http_error'
+  | 'response_too_large'
+  | 'fallback_error'
+  | 'processing_error'
+  | 'timeout'
+
+export type FetchErrorPhase =
+  | 'resolve'
+  | 'network'
+  | 'response'
+  | 'download'
+  | 'extract'
+  | 'process'
+  | 'unknown'
 
 export type FetchDetails = {
   responseId?: string
@@ -67,6 +100,10 @@ export type FetchDetails = {
   isImage?: boolean
   imageMimeType?: string
   imageSize?: number
+  isFile?: boolean
+  filePath?: string
+  fileName?: string
+  fileSize?: number
   status?: number
   statusText?: string
   contentType?: string
@@ -77,6 +114,33 @@ export type FetchDetails = {
   contentLength?: number
   cached?: boolean
   cacheAgeMs?: number
+  errorCode?: FetchErrorCode
+  errorPhase?: FetchErrorPhase
+  retryable?: boolean
+}
+
+export type BatchFetchItemSummary = {
+  index: number
+  url: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  progress?: number
+  title?: string | null
+  format?: string
+  responseId?: string
+  statusCode?: number
+  error?: string
+  errorCode?: FetchErrorCode
+  errorPhase?: FetchErrorPhase
+  retryable?: boolean
+}
+
+export type BatchFetchDetails = {
+  total: number
+  completed: number
+  succeeded: number
+  failed: number
+  concurrency: number
+  items: BatchFetchItemSummary[]
 }
 
 export type TextToolContent = { type: 'text'; text: string }
@@ -96,10 +160,13 @@ export type GuardedFetchResponse = {
   headers: Headers
   ok: boolean
   bodyBuffer: Buffer
+  downloadedFilePath?: string
+  downloadedFileSize?: number
 }
 
 export type GuardedRequester = (
   url: URL,
   signal: AbortSignal,
   userAgent: string,
+  options?: FetchRequestOptions,
 ) => Promise<GuardedFetchResponse>

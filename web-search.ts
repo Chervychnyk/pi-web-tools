@@ -1,7 +1,7 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
 import { StringEnum } from '@mariozechner/pi-ai'
 import { Text } from '@mariozechner/pi-tui'
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { formatSearchResponseText } from './search-format.ts'
 import {
   DEFAULT_TIMEOUT,

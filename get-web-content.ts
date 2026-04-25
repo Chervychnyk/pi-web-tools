@@ -1,6 +1,6 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
 import { Text } from '@mariozechner/pi-tui'
-import { Type } from '@sinclair/typebox'
+import { Type } from 'typebox'
 import { formatStoredSearchResponseText } from './search-format.ts'
 import { renderBadges, renderToolCallHeader, truncateForModel, truncateText } from './shared.ts'
 import {

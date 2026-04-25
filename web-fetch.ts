@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
-import { createWebFetchTool } from './fetch/tool.ts'
+import { createBatchWebFetchTool, createWebFetchTool } from './fetch/tool.ts'
 
 export type {
+  BatchFetchDetails,
+  BatchFetchItemSummary,
   FetchDetails,
   GuardedFetchResponse,
   GuardedRequester,
@@ -30,8 +32,9 @@ export {
   shouldApplyHtmlGuard,
   shouldUseJinaFallbackForStatus,
 } from './fetch/network.ts'
-export { createWebFetchTool } from './fetch/tool.ts'
+export { createBatchWebFetchTool, createWebFetchTool } from './fetch/tool.ts'
 
 export function registerWebFetchTool(pi: ExtensionAPI) {
   pi.registerTool(createWebFetchTool())
+  pi.registerTool(createBatchWebFetchTool())
 }
