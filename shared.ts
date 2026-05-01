@@ -293,19 +293,23 @@ export function truncateText(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value
 }
 
+export function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`
+}
+
 export function appendStoredResponseNote(
   content: string,
   responseId?: string,
   toolName = 'get_web_content',
+  context?: { source?: string; label?: string },
 ) {
   if (!responseId) return content
 
-  return [
-    content,
-    '---',
-    `[responseId: ${responseId}]`,
-    `Use ${toolName}({ responseId: ${JSON.stringify(responseId)} }) to retrieve stored content.`,
-  ].join('\n\n')
+  const lines = [`responseId: ${responseId}`]
+  if (context?.source) lines.push(`${context.label || 'Source'}: ${context.source}`)
+  lines.push(`Retrieve: ${toolName}({ responseId: ${JSON.stringify(responseId)} })`)
+
+  return [content, '---', lines.join('\n')].join('\n\n')
 }
 
 export function renderBadges(

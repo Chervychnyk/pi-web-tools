@@ -102,6 +102,13 @@ export function composeFetchTextOutput(
   return [...messageParts, content].join('\n')
 }
 
+function resolveFetchFallbackSource(details: FetchDetails) {
+  if (details.jinaFallbackUsed) return 'jina'
+  if (details.githubSource) return `github-${details.githubSource}`
+  if (details.pdfExtracted) return 'pdf'
+  return undefined
+}
+
 export function buildTextFetchResult(
   text: string,
   extension: string,
@@ -113,6 +120,9 @@ export function buildTextFetchResult(
     'truncated' | 'tempFile' | 'charLimited' | 'maxChars' | 'originalChars'
   >,
 ) {
+  const selectedSelector = detailOverrides.selectedSelector
+    ? { selectedSelector: detailOverrides.selectedSelector }
+    : {}
   const stored = tryStoreWebResponse({
     kind: 'fetch',
     requestUrl,
@@ -121,16 +131,18 @@ export function buildTextFetchResult(
     title: detailOverrides.title,
     contentType: detailOverrides.contentType,
     messageText: text,
-    ...(detailOverrides.selectedSelector
-      ? { selectedSelector: detailOverrides.selectedSelector }
-      : {}),
+    sourceTool: 'web_fetch',
+    fallbackUsed: resolveFetchFallbackSource(detailOverrides),
+    ...selectedSelector,
   })
   const output = truncateForModel(text, extension, maxChars)
   const result = {
     content: [
       {
         type: 'text' as const,
-        text: appendStoredResponseNote(output.text, stored?.responseId),
+        text: appendStoredResponseNote(output.text, stored?.responseId, 'get_web_content', {
+          source: detailOverrides.url,
+        }),
       },
     ],
     details: {

@@ -32,6 +32,11 @@ export {
   shouldApplyHtmlGuard,
   shouldUseJinaFallbackForStatus,
 } from './fetch/network.ts'
+export {
+  cleanupMarkdown,
+  extractBestHtmlContent,
+  normalizeHtmlForConversion,
+} from './fetch/content.ts'
 export { createBatchWebFetchTool, createWebFetchTool } from './fetch/tool.ts'
 
 export function registerWebFetchTool(pi: ExtensionAPI) {

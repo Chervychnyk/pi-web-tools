@@ -27,8 +27,9 @@ Use `web_search` with `queries` (2-6) when a single query won't cover the topic.
 
 ### Browse stored results
 
-When `web_search` returns a `responseId`, use `get_web_content` to page through the full stored output without rerunning the search.
+When `web_search` returns a `responseId`, use `get_web_content` to page through the full stored output without rerunning the search. If you need to recover which ID belongs to which query, use `list_web_content`.
 
+- `list_web_content()` — list recent stored search/fetch IDs and their source queries or URLs.
 - `get_web_content({ responseId })` — retrieve the full stored result.
 - `offset` / `limit` — page through long results (default 200 lines per page).
 - `query` or `queryIndex` — select a specific query from multi-query results.
@@ -53,6 +54,13 @@ When `web_search` returns a `responseId`, use `get_web_content` to page through 
 | `timeout` | Request timeout in ms (default 10000) |
 | `maxChars` | Character cap for formatted output |
 | `refresh` | Bypass cache (default false) |
+
+### list_web_content
+
+| Parameter | Description |
+|-----------|-------------|
+| `limit` | Maximum stored responses to show (default 20) |
+| `kind` | Optional filter: `fetch` or `search` |
 
 ### get_web_content
 

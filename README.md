@@ -8,6 +8,7 @@ It provides:
 - `web_fetch`
 - `batch_web_fetch`
 - `get_web_content`
+- `list_web_content`
 - bundled skills:
   - `web-search`
   - `web-fetch`
@@ -136,7 +137,7 @@ batch_web_fetch({
 
 ### `get_web_content`
 
-Retrieve stored full content from earlier `web_search` or `web_fetch` calls.
+Retrieve stored full content from earlier `web_search` or `web_fetch` calls. Output includes source context such as URL, title, format, search provider, and result count before the stored content.
 
 Examples:
 
@@ -144,6 +145,17 @@ Examples:
 get_web_content({ responseId: "wt_..." })
 get_web_content({ responseId: "wt_...", queryIndex: 0 })
 get_web_content({ responseId: "wt_...", offset: 201, limit: 200 })
+```
+
+### `list_web_content`
+
+List recent stored responses when you need to recover which `responseId` belongs to which URL or search query.
+
+Examples:
+
+```ts
+list_web_content()
+list_web_content({ kind: "fetch", limit: 10 })
 ```
 
 ## Skills
@@ -170,6 +182,7 @@ Guides Pi toward using:
 - `web-fetch.ts` — public `web_fetch` / `batch_web_fetch` exports + registration
 - `fetch/` — web fetch internals (network guards, extraction, tool implementation, shared fetch types)
 - `get-web-content.ts` — stored-content retrieval
+- `list-web-content.ts` — stored response index/listing
 - `storage.ts` — persisted response store
 - `github.ts` — public GitHub helpers + fetch orchestration
 - `github-support/` — GitHub cache, CLI, URL parsing, and rendering internals

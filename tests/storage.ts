@@ -7,8 +7,10 @@ import {
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { createGetWebContentTool, type GetWebContentDetails } from '../get-web-content.ts'
+import { createListWebContentTool } from '../list-web-content.ts'
 import {
   getStoredWebResponse,
+  listStoredWebResponses,
   sliceStoredText,
   storeWebResponse,
   tryStoreWebResponse,
@@ -69,10 +71,25 @@ function testStoredResponseHelpers() {
       contentType: 'text/html',
       messageText: '# Example Docs\n\nLine 1\nLine 2\nLine 3',
     })
-    assert.equal(
-      getStoredWebResponse(storedFetch.responseId)?.kind,
-      'fetch',
-    )
+    const loadedFetch = getStoredWebResponse(storedFetch.responseId)
+    assert.equal(loadedFetch?.kind, 'fetch')
+    assert.equal(loadedFetch?.lineCount, 5)
+    assert.equal(loadedFetch?.charCount, '# Example Docs\n\nLine 1\nLine 2\nLine 3'.length)
+
+    const emptyFetch = storeWebResponse({
+      kind: 'fetch',
+      requestUrl: 'https://example.com/empty',
+      finalUrl: 'https://example.com/empty',
+      format: 'text',
+      messageText: '',
+    })
+    assert.equal(getStoredWebResponse(emptyFetch.responseId)?.lineCount, 0)
+    assert.ok(loadedFetch?.contentHash)
+    assert.equal('wordCount' in loadedFetch!, false)
+
+    const listed = listStoredWebResponses({ limit: 3 })
+    assert.equal(listed.length, 3)
+    assert.ok(listed.some((item) => item.responseId === storedFetch.responseId))
 
     const slice = sliceStoredText('a\nb\nc', 2, 1)
     assert.deepEqual(slice, {
@@ -153,6 +170,28 @@ function testStoredResponseHelpers() {
 }
 
 async function testGetWebContentExecutePaths() {
+  const storedFetch = storeWebResponse({
+    kind: 'fetch',
+    requestUrl: 'https://example.com/old-docs',
+    finalUrl: 'https://example.com/docs',
+    format: 'markdown',
+    title: 'Example Docs',
+    messageText: '# Example Docs\n\nLine 1',
+  })
+
+  const tool = createGetWebContentTool()
+  const fetchResult = await tool.execute(
+    'content-tool-fetch',
+    { responseId: storedFetch.responseId, offset: 1, limit: 2 },
+    undefined,
+    undefined,
+  )
+  const fetchContent = fetchResult.content[0] as { type: 'text'; text: string }
+  assert.match(fetchContent.text, /Source URL: https:\/\/example\.com\/docs/)
+  assert.match(fetchContent.text, /Requested URL: https:\/\/example\.com\/old-docs/)
+  assert.match(fetchContent.text, /Title: Example Docs/)
+  assert.match(fetchContent.text, /# Example Docs/)
+
   const stored = storeWebResponse({
     kind: 'search',
     requestedProvider: 'auto',
@@ -176,7 +215,6 @@ async function testGetWebContentExecutePaths() {
     ],
   })
 
-  const tool = createGetWebContentTool()
   const result = await tool.execute(
     'content-tool-1',
     { responseId: stored.responseId, query: 'alpha', offset: 1, limit: 1 },
@@ -190,7 +228,71 @@ async function testGetWebContentExecutePaths() {
   assert.equal(details.returnedLines, 1)
   assert.equal(details.hasMore, true)
   assert.equal(details.nextOffset, 2)
+  assert.match(content.text, /Search query: alpha/)
+  assert.match(content.text, /Requested provider: auto/)
+  assert.match(content.text, /Result count: 1/)
+  assert.match(content.text, /Query index: 0/)
   assert.match(content.text, /Continue with: get_web_content/)
+
+  const listTool = createListWebContentTool()
+  const listResult = await listTool.execute(
+    'list-content-tool-1',
+    { kind: 'fetch', limit: 5 },
+    undefined,
+    undefined,
+  )
+  const listContent = listResult.content[0] as { type: 'text'; text: string }
+  const listDetails = listResult.details as { items: Array<Record<string, unknown>> }
+  assert.match(listContent.text, /Stored web content:/)
+  assert.match(listContent.text, /Source: https:\/\/example\.com\/docs/)
+  assert.match(listContent.text, /Retrieve: get_web_content/)
+  assert.equal('messageText' in listDetails.items[0]!, false)
+  assert.equal('results' in listDetails.items[0]!, false)
+}
+
+async function testGetWebContentMultiQueryContext() {
+  const stored = storeWebResponse({
+    kind: 'search',
+    requestedProvider: 'auto',
+    queries: ['duplicate', 'duplicate'],
+    queryResults: [
+      {
+        query: 'duplicate',
+        provider: 'duckduckgo',
+        count: 2,
+        results: [
+          { title: 'First A', url: 'https://first-a.test' },
+          { title: 'First B', url: 'https://first-b.test' },
+        ],
+        attempts: [{ provider: 'duckduckgo', ok: true, durationMs: 10, count: 2 }],
+        fallbackUsed: false,
+        durationMs: 10,
+      },
+      {
+        query: 'duplicate',
+        provider: 'duckduckgo',
+        count: 1,
+        results: [{ title: 'Second', url: 'https://second.test' }],
+        attempts: [{ provider: 'duckduckgo', ok: true, durationMs: 8, count: 1 }],
+        fallbackUsed: false,
+        durationMs: 8,
+      },
+    ],
+  })
+
+  const tool = createGetWebContentTool()
+  const result = await tool.execute(
+    'content-tool-multi-query',
+    { responseId: stored.responseId, queryIndex: 1, offset: 1, limit: 1 },
+    undefined,
+    undefined,
+  )
+  const content = result.content[0] as { type: 'text'; text: string }
+
+  assert.match(content.text, /Result count: 1/)
+  assert.match(content.text, /Query index: 1/)
+  assert.match(content.text, /queryIndex: 1/)
+  assert.doesNotMatch(content.text, /Result count: 3/)
 }
 
 async function testLegacySearchStorageCompatibility() {
@@ -240,5 +342,6 @@ async function testLegacySearchStorageCompatibility() {
 export async function runStorageTests() {
   testStoredResponseHelpers()
   await testGetWebContentExecutePaths()
+  await testGetWebContentMultiQueryContext()
   await testLegacySearchStorageCompatibility()
 }

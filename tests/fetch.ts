@@ -7,10 +7,12 @@ import path from 'node:path'
 import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib'
 import {
   buildJinaReaderUrl,
+  cleanupMarkdown,
   createBatchWebFetchTool,
   createWebFetchTool,
   decodeBodyAsText,
   decodeContentEncoding,
+  extractBestHtmlContent,
   extractPdfText,
   fetchWithOptionalCloudflareRetry,
   fetchWithRedirects,
@@ -20,6 +22,7 @@ import {
   isPdfUrl,
   isPrivateIpAddress,
   looksLikeBlockedOrJunkContent,
+  normalizeHtmlForConversion,
   parseCharsetFromContentType,
   parseContentLength,
   shouldApplyHtmlGuard,
@@ -801,6 +804,35 @@ async function testImagesBypassInMemoryCache() {
   assert.equal(networkCalls, 2)
 }
 
+function testHtmlNormalizationHelpers() {
+  const linkedHeadingHtml = normalizeHtmlForConversion(
+    '<html><body><a href="/story"><h2>Story title</h2></a></body></html>',
+    'https://example.com/base/',
+  )
+  assert.match(linkedHeadingHtml, /<h2><a href="https:\/\/example\.com\/story">Story title<\/a><\/h2>/)
+  assert.equal(cleanupMarkdown('[\n\n## Story title\n\n](https://example.com/story)'), '## [Story title](https://example.com/story)')
+
+  const relativeUrlHtml = normalizeHtmlForConversion(
+    '<html><body><a href="/docs">Docs</a><img src="./image.png" srcset="small.png 1x, /large.png 2x"></body></html>',
+    'https://example.com/base/index.html',
+  )
+  assert.match(relativeUrlHtml, /href="https:\/\/example\.com\/docs"/)
+  assert.match(relativeUrlHtml, /src="https:\/\/example\.com\/base\/image\.png"/)
+  assert.match(relativeUrlHtml, /https:\/\/example\.com\/base\/small\.png 1x/)
+  assert.match(relativeUrlHtml, /https:\/\/example\.com\/large\.png 2x/)
+
+  const tableArticle = extractBestHtmlContent(
+    `<html><body><div id="bigbox"><table><tbody>
+      <tr><td>1.</td><td><a href="/item">Item title</a></td></tr>
+      <tr><td></td><td>123 points by alice</td></tr>
+    </tbody></table></div></body></html>`,
+    'https://news.ycombinator.com/',
+  )
+  assert.match(tableArticle.contentHtml, /Item title/)
+  assert.match(tableArticle.contentHtml, /123 points by alice/)
+  assert.doesNotMatch(tableArticle.contentHtml, /<table|<tr|<td/i)
+}
+
 function testJinaHelpers() {
   assert.equal(
     buildJinaReaderUrl('https://example.com/docs?q=1').toString(),
@@ -916,6 +948,7 @@ export async function runFetchTests() {
   await testPreDownloadedFileReuse()
   await testDownloadedFileCleanupOnNonOkResponse()
   await testImagesBypassInMemoryCache()
+  testHtmlNormalizationHelpers()
   testJinaHelpers()
   testResponseDecodingHelpers()
   testFetchGuardHelpers()

@@ -93,10 +93,12 @@ export function extractBestHtmlContent(
   url: string,
   selector?: string,
 ): ArticleData {
+  const normalizedHtml = normalizeHtmlForConversion(html, url)
+
   if (selector) {
-    const selected = selectFragment(html, selector)
+    const selected = selectFragment(normalizedHtml, selector)
     return {
-      title: extractHtmlTitle(html),
+      title: extractHtmlTitle(normalizedHtml),
       byline: null,
       excerpt: null,
       siteName: null,
@@ -107,18 +109,18 @@ export function extractBestHtmlContent(
     }
   }
 
-  const article = extractReadableArticle(html, url)
+  const article = extractReadableArticle(normalizedHtml, url)
   if (article.textContent.length >= SELECTOR_FALLBACK_MIN_TEXT_LENGTH) {
     return article
   }
 
-  const bestSelector = findBestContentSelector(html)
+  const bestSelector = findBestContentSelector(normalizedHtml)
   if (!bestSelector || bestSelector.text.length <= article.textContent.length) {
     return article
   }
 
   return {
-    title: article.title || extractHtmlTitle(html),
+    title: article.title || extractHtmlTitle(normalizedHtml),
     byline: article.byline,
     excerpt: article.excerpt,
     siteName: article.siteName,
@@ -151,8 +153,144 @@ export function getTurndownService() {
   return turndownInstance
 }
 
+export function normalizeHtmlForConversion(html: string, url: string): string {
+  const $ = cheerio.load(html)
+
+  for (const element of $('[href], [src], [poster], [srcset]').toArray()) {
+    const $element = $(element)
+
+    for (const attribute of ['href', 'src', 'poster'] as const) {
+      const value = $element.attr(attribute)
+      if (!value) continue
+
+      const resolved = resolveHtmlUrl(value, url, attribute !== 'href')
+      if (resolved) $element.attr(attribute, resolved)
+      else $element.removeAttr(attribute)
+    }
+
+    const srcset = $element.attr('srcset')
+    if (srcset) {
+      const resolved = resolveSrcset(srcset, url)
+      if (resolved) $element.attr('srcset', resolved)
+      else $element.removeAttr('srcset')
+    }
+  }
+
+  normalizeBlockHeadingLinks($)
+  flattenLayoutTables($)
+
+  return $.html()
+}
+
+function normalizeBlockHeadingLinks($: cheerio.CheerioAPI) {
+  $('a[href]').each((_, link) => {
+    const $link = $(link)
+    const children = $link.children().toArray()
+    if (children.length !== 1) return
+
+    const onlyChild = children[0]!
+    if (!$(onlyChild).is('h1, h2, h3, h4, h5, h6')) return
+
+    const replacementLink = $('<a></a>')
+    const href = $link.attr('href')
+    const title = $link.attr('title')
+    if (href) replacementLink.attr('href', href)
+    if (title) replacementLink.attr('title', title)
+    replacementLink.html($(onlyChild).html() || '')
+    $(onlyChild).empty().append(replacementLink)
+    $link.replaceWith(onlyChild)
+  })
+}
+
+function flattenLayoutTables($: cheerio.CheerioAPI) {
+  const tables = $('table').toArray().reverse()
+  for (const table of tables) {
+    if (!isLikelyLayoutTable($, table)) continue
+
+    $(table)
+      .find('thead, tbody, tfoot, tr, td, th')
+      .toArray()
+      .reverse()
+      .forEach((element) => replaceTag($, element, 'div'))
+    replaceTag($, table, 'div')
+  }
+}
+
+function isLikelyLayoutTable($: cheerio.CheerioAPI, table: cheerio.Element) {
+  const $table = $(table)
+  if ($table.find('caption, thead, th').length) return false
+  if ($table.attr('role') === 'table' || $table.attr('role') === 'grid') return false
+  if ($table.closest('#hnmain, #bigbox').length) return true
+  if ($table.find('table').length) return true
+
+  const layoutAttributes = ['align', 'bgcolor', 'border', 'cellpadding', 'cellspacing', 'width']
+  if (layoutAttributes.some((attribute) => $table.attr(attribute) !== undefined)) return true
+
+  const rows = $table.find('tr').toArray().filter((row) => $(row).parents('table').first()[0] === table)
+  if (!rows.length) return true
+
+  const cellCounts = rows
+    .map((row) => $(row).children('td, th').length)
+    .filter((count) => count > 0)
+  if (!cellCounts.length) return true
+  if (Math.max(...cellCounts) <= 1) return true
+  if (new Set(cellCounts).size > 1) return true
+
+  const cells = rows.flatMap((row) => $(row).children('td, th').toArray())
+  const averageCellTextLength =
+    cells.reduce((total, cell) => total + normalizeWhitespace($(cell).text()).length, 0) /
+    Math.max(1, cells.length)
+  const linkCount = $table.find('a').toArray().filter((link) => $(link).parents('table').first()[0] === table).length
+  return linkCount > cells.length * 0.6 && averageCellTextLength < 120
+}
+
+function replaceTag($: cheerio.CheerioAPI, element: cheerio.Element, tagName: string) {
+  const replacement = $(`<${tagName}></${tagName}>`)
+  replacement.html($(element).html() || '')
+  $(element).replaceWith(replacement)
+}
+
+function resolveHtmlUrl(value: string, baseUrl: string, allowDataUrl: boolean) {
+  const trimmed = value.trim()
+  if (!trimmed) return undefined
+
+  try {
+    const resolved = new URL(trimmed, baseUrl)
+    if (resolved.protocol === 'javascript:' || resolved.protocol === 'vbscript:') return undefined
+    if (resolved.protocol === 'data:' && !allowDataUrl) return undefined
+    return resolved.toString()
+  } catch {
+    return undefined
+  }
+}
+
+function resolveSrcset(srcset: string, baseUrl: string) {
+  const candidates = srcset
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [urlPart, descriptor] = entry.split(/\s+/, 2)
+      if (!urlPart) return undefined
+      const resolved = resolveHtmlUrl(urlPart, baseUrl, true)
+      if (!resolved) return undefined
+      return descriptor ? `${resolved} ${descriptor}` : resolved
+    })
+    .filter((entry): entry is string => Boolean(entry))
+
+  return candidates.length ? candidates.join(', ') : undefined
+}
+
 export function cleanupMarkdown(markdown: string): string {
-  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  const normalizedMarkdown = markdown
+    .replace(/\r\n/g, '\n')
+    .replace(
+      /\[\s*\n+(#{1,6})\s+([^\n]+?)\s*\n+\s*\]\(([^)]+)\)/g,
+      (_match, hashes: string, text: string, url: string) =>
+        `${hashes} [${text.trim()}](${url})`,
+    )
+
+  const lines = normalizedMarkdown.split('\n')
   const cleaned: string[] = []
   let inFence = false
 

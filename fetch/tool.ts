@@ -69,6 +69,19 @@ class WebFetchError extends Error {
   }
 }
 
+function getWebFetchErrorHint(error: WebFetchError) {
+  if (error.meta.code === 'timeout') return 'Next: retry with a larger timeout or a narrower URL.'
+  if (error.meta.code === 'http_error' && (error.meta.statusCode === 403 || error.meta.statusCode === 429)) {
+    return 'Next: retry later, use refresh=true, or use an allowed proxy/header if appropriate.'
+  }
+  if (error.meta.code === 'response_too_large') return 'Next: use a CSS selector, maxChars, or fetch a more specific page.'
+  if (error.meta.code === 'invalid_request' && /selector/i.test(error.message)) {
+    return 'Next: retry without selector or inspect the page with format=html.'
+  }
+  if (error.meta.code === 'fallback_error') return 'Next: retry the original URL directly or fetch a more specific source URL.'
+  return undefined
+}
+
 function buildWebFetchErrorMessage(error: WebFetchError) {
   const parts = [
     `[web_fetch_error] code=${error.meta.code}`,
@@ -89,7 +102,8 @@ function buildWebFetchErrorMessage(error: WebFetchError) {
     parts.push(`finalUrl=${encodeURIComponent(error.meta.finalUrl)}`)
   }
 
-  return `${error.message}\n${parts.join(' ')}`
+  const hint = getWebFetchErrorHint(error)
+  return [error.message, hint, parts.join(' ')].filter(Boolean).join('\n')
 }
 
 function createWebFetchError(

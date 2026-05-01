@@ -50,8 +50,9 @@ When a response is non-text (for example `application/octet-stream`, ZIPs, insta
 
 ### Retrieve stored content
 
-When `web_fetch` returns a `responseId`, use `get_web_content` to page through the full stored content without refetching.
+When `web_fetch` returns a `responseId`, use `get_web_content` to page through the full stored content without refetching. If you have lost the mapping between IDs and URLs, use `list_web_content` first.
 
+- `list_web_content()` — list recent stored IDs with their URLs or queries.
 - `get_web_content({ responseId })` — retrieve the stored result.
 - `offset` / `limit` — page through long content (default 200 lines per page).
 - Large responses are truncated with full output saved to a temp file.
@@ -87,6 +88,13 @@ When `web_fetch` returns a `responseId`, use `get_web_content` to page through t
 |-----------|-------------|
 | `requests` | Array of `web_fetch` request objects |
 | `concurrency` | Maximum concurrent requests (default 4) |
+
+### list_web_content
+
+| Parameter | Description |
+|-----------|-------------|
+| `limit` | Maximum stored responses to show (default 20) |
+| `kind` | Optional filter: `fetch` or `search` |
 
 ### get_web_content
 

@@ -56,6 +56,10 @@ export type StoredSearchResponse = {
   queries: string[]
   queryResults: StoredSearchQuery[]
   messageText?: string
+  lineCount?: number
+  charCount?: number
+  resultCount?: number
+  sourceTool?: string
 }
 
 export type StoredFetchResponse = {
@@ -69,6 +73,12 @@ export type StoredFetchResponse = {
   selectedSelector?: string
   contentType?: string
   messageText: string
+  lineCount?: number
+  charCount?: number
+  contentHash?: string
+  sourceTool?: string
+  cacheHit?: boolean
+  fallbackUsed?: string
 }
 
 export type StoredWebResponse = StoredSearchResponse | StoredFetchResponse
@@ -221,13 +231,47 @@ export function createResponseId() {
   return `wt_${Date.now().toString(36)}_${randomUUID().replace(/-/g, '').slice(0, 8)}`
 }
 
+function countLines(text: string) {
+  if (!text) return 0
+  return text.replace(/\r\n/g, '\n').split('\n').length
+}
+
+function hashContent(text: string) {
+  let hash = 5381
+  for (let index = 0; index < text.length; index++) {
+    hash = ((hash << 5) + hash) ^ text.charCodeAt(index)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
+function enrichStoredResponse(input: StoredWebResponseInput): StoredWebResponseInput {
+  if (input.kind === 'fetch') {
+    return {
+      ...input,
+      lineCount: input.lineCount ?? countLines(input.messageText),
+      charCount: input.charCount ?? input.messageText.length,
+      contentHash: input.contentHash ?? hashContent(input.messageText),
+    }
+  }
+
+  const messageText = input.messageText
+  const resultCount = input.queryResults.reduce((total, item) => total + item.count, 0)
+
+  return {
+    ...input,
+    lineCount: input.lineCount ?? (messageText ? countLines(messageText) : undefined),
+    charCount: input.charCount ?? messageText?.length,
+    resultCount: input.resultCount ?? resultCount,
+  }
+}
+
 export function storeWebResponse(
   input: StoredWebResponseInput,
   env: NodeJS.ProcessEnv = process.env,
 ): StoredWebResponse {
   const responseId = createResponseId()
   const stored: StoredWebResponse = {
-    ...input,
+    ...enrichStoredResponse(input),
     responseId,
     createdAt: new Date().toISOString(),
   }
@@ -263,6 +307,35 @@ export function getStoredWebResponse(
   if (!filePath) return undefined
 
   return JSON.parse(readFileSync(filePath, 'utf8')) as StoredWebResponse
+}
+
+export function listStoredWebResponses(
+  options: { limit?: number; kind?: StoredWebResponse['kind'] } = {},
+  env: NodeJS.ProcessEnv = process.env,
+): StoredWebResponse[] {
+  const limit = options.limit ?? 20
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error(`Invalid limit: ${limit}`)
+  }
+
+  const entries: Array<{ response: StoredWebResponse; mtimeMs: number }> = []
+  for (const root of getStorageRootCandidates(env)) {
+    const dir = getResponsesDirForRoot(root)
+    if (!existsSync(dir)) continue
+
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.json')) continue
+      const filePath = path.join(dir, file)
+      const response = JSON.parse(readFileSync(filePath, 'utf8')) as StoredWebResponse
+      if (options.kind && response.kind !== options.kind) continue
+      entries.push({ response, mtimeMs: statSync(filePath).mtimeMs })
+    }
+  }
+
+  return entries
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, limit)
+    .map((entry) => entry.response)
 }
 
 export function sliceStoredText(

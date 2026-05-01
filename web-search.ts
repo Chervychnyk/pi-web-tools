@@ -437,10 +437,13 @@ export function createWebSearchTool(
           onUpdate,
         })
 
+        const previewText = buildSearchPreview(queryResults)
         const stored = storeResponse({
           kind: 'search',
           requestedProvider,
           queries,
+          messageText: previewText,
+          sourceTool: 'web_search',
           queryResults: queryResults.map((item) => ({
             query: item.query,
             provider: item.provider,
@@ -451,16 +454,20 @@ export function createWebSearchTool(
             durationMs: item.durationMs,
           })),
         })
-        const previewText = buildSearchPreview(queryResults)
         const output = truncateForModel(previewText, '.txt', maxChars)
         const flattenedResults = queryResults.flatMap((item) => item.results)
         const flattenedAttempts = queryResults.flatMap((item) => item.attempts)
 
+        const storedResponseSource =
+          queries.length === 1 ? queries[0] : `${queries.length} queries`
         const response = {
           content: [
             {
               type: 'text' as const,
-              text: appendStoredResponseNote(output.text, stored?.responseId),
+              text: appendStoredResponseNote(output.text, stored?.responseId, 'get_web_content', {
+                source: storedResponseSource,
+                label: 'Search',
+              }),
             },
           ],
           details: {
