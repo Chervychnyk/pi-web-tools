@@ -20,6 +20,7 @@ import {
   isBlockedHostname,
   isPdfMimeType,
   isPdfUrl,
+  isPoorMarkdownConversion,
   isPrivateIpAddress,
   looksLikeBlockedOrJunkContent,
   normalizeHtmlForConversion,
@@ -127,7 +128,8 @@ async function testMockedFetchFlows() {
   )
   assert.equal(retried.cloudflareBypassed, true)
   assert.equal(retried.response.status, 200)
-  assert.deepEqual(userAgents, ['pi-web-fetch/1.1', 'web_fetch/1.1'])
+  assert.match(userAgents[0] || '', /Mozilla\/5\.0/)
+  assert.equal(userAgents[1], 'pi-web-fetch/1.1')
   assert.ok(
     updates.some((text) => text.includes('Cloudflare challenge detected')),
   )
@@ -820,6 +822,14 @@ function testHtmlNormalizationHelpers() {
   assert.match(relativeUrlHtml, /src="https:\/\/example\.com\/base\/image\.png"/)
   assert.match(relativeUrlHtml, /https:\/\/example\.com\/base\/small\.png 1x/)
   assert.match(relativeUrlHtml, /https:\/\/example\.com\/large\.png 2x/)
+
+  const cleanedBoilerplateHtml = normalizeHtmlForConversion(
+    '<html><body><nav>Navigation</nav><main><p>Article body</p></main><div class="cookie-banner">Cookies</div></body></html>',
+    'https://example.com/',
+  )
+  assert.doesNotMatch(cleanedBoilerplateHtml, /Navigation|Cookies/)
+  assert.match(cleanedBoilerplateHtml, /Article body/)
+  assert.equal(isPoorMarkdownConversion('<div>one</div><section>two</section><table><tr><td>three</td></tr></table>'), true)
 
   const tableArticle = extractBestHtmlContent(
     `<html><body><div id="bigbox"><table><tbody>

@@ -10,14 +10,37 @@ const CONTENT_SELECTOR_CANDIDATES = [
   'article',
   'main',
   '[role="main"]',
+  '#readme',
+  '[data-testid="repository-readme-content"]',
   '#content',
+  '#main-content',
+  '.main-content',
   '.content',
   '.post-content',
   '.entry-content',
+  '.article-content',
   '.article',
   '.markdown-body',
 ]
+const BOILERPLATE_SELECTOR = [
+  'header',
+  'footer',
+  'nav',
+  'aside',
+  'dialog',
+  'menu',
+  '[role="banner"]',
+  '[role="navigation"]',
+  '[role="complementary"]',
+  '[role="contentinfo"]',
+  '[aria-modal="true"]',
+  '[hidden]',
+  '[aria-hidden="true"]',
+].join(', ')
+const BOILERPLATE_TOKEN_RE =
+  /(^|[-_\s])(nav(?:igation)?|header|footer|sidebar|aside|menu|dialog|modal|cookie|consent|promo|advert|ad|social|share|breadcrumb|pagination|pager|toolbar|newsletter|subscribe|signup|banner|related|recommendation)s?($|[-_\s])/i
 const SELECTOR_FALLBACK_MIN_TEXT_LENGTH = 280
+const RAW_HTML_BLOCK_TAG_RE = /<(table|tbody|thead|tfoot|tr|td|th|div|section|article|main|header|footer|nav|aside)\b/gi
 
 type SelectorFragment = { html: string; text: string; selector: string }
 
@@ -156,6 +179,8 @@ export function getTurndownService() {
 export function normalizeHtmlForConversion(html: string, url: string): string {
   const $ = cheerio.load(html)
 
+  removeBoilerplateElements($)
+
   for (const element of $('[href], [src], [poster], [srcset]').toArray()) {
     const $element = $(element)
 
@@ -180,6 +205,18 @@ export function normalizeHtmlForConversion(html: string, url: string): string {
   flattenLayoutTables($)
 
   return $.html()
+}
+
+function removeBoilerplateElements($: cheerio.CheerioAPI) {
+  $(BOILERPLATE_SELECTOR).remove()
+
+  $('[class], [id]').each((_, element) => {
+    const className = $(element).attr('class') || ''
+    const id = $(element).attr('id') || ''
+    if (BOILERPLATE_TOKEN_RE.test(`${id} ${className}`)) {
+      $(element).remove()
+    }
+  })
 }
 
 function normalizeBlockHeadingLinks($: cheerio.CheerioAPI) {
@@ -279,6 +316,12 @@ function resolveSrcset(srcset: string, baseUrl: string) {
     .filter((entry): entry is string => Boolean(entry))
 
   return candidates.length ? candidates.join(', ') : undefined
+}
+
+export function isPoorMarkdownConversion(markdown: string) {
+  const rawBlockTags = markdown.match(RAW_HTML_BLOCK_TAG_RE)?.length ?? 0
+  if (rawBlockTags >= 6) return true
+  return /^\s*<(table|tbody|thead|tfoot|tr|td|th|div|section|article|main)\b/i.test(markdown)
 }
 
 export function cleanupMarkdown(markdown: string): string {

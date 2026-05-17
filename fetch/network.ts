@@ -16,8 +16,10 @@ import type {
   GuardedRequester,
 } from './types.ts'
 
-const FETCH_USER_AGENT = 'pi-web-fetch/1.1'
-const FETCH_USER_AGENT_FALLBACK = 'web_fetch/1.1'
+const DEFAULT_BROWSER_USER_AGENT =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+const FETCH_USER_AGENT = process.env.PI_WEB_FETCH_USER_AGENT?.trim() || DEFAULT_BROWSER_USER_AGENT
+const FETCH_USER_AGENT_FALLBACK = process.env.PI_WEB_FETCH_FALLBACK_USER_AGENT?.trim() || 'pi-web-fetch/1.1'
 const ACCEPT_ENCODING_HEADER = 'gzip, deflate, br'
 const JINA_READER_HOST = 'r.jina.ai'
 const PDF_MIME_TYPES = new Set(['application/pdf', 'application/x-pdf'])

@@ -4,6 +4,7 @@ import {
   extractBestHtmlContent,
   extractHtmlTitle,
   getTurndownService,
+  isPoorMarkdownConversion,
   selectFragment,
 } from './content.ts'
 import { emitFetchProgress } from './progress.ts'
@@ -101,6 +102,9 @@ export async function extractFetchContent(
         content = cleanupMarkdown(
           getTurndownService().turndown(article.contentHtml),
         )
+        if (isPoorMarkdownConversion(content)) {
+          content = article.textContent
+        }
       } else {
         content = article.textContent
       }

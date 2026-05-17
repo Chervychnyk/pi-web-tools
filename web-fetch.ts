@@ -35,6 +35,7 @@ export {
 export {
   cleanupMarkdown,
   extractBestHtmlContent,
+  isPoorMarkdownConversion,
   normalizeHtmlForConversion,
 } from './fetch/content.ts'
 export { createBatchWebFetchTool, createWebFetchTool } from './fetch/tool.ts'
