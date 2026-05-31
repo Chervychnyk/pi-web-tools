@@ -2,6 +2,7 @@ import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
 import { StringEnum } from '@mariozechner/pi-ai'
 import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
+import { applyPromptGuidance } from './config.ts'
 import { formatSearchResponseText } from './search-format.ts'
 import {
   DEFAULT_TIMEOUT,
@@ -297,7 +298,7 @@ export function createWebSearchTool(
   const resolveProviders = deps.resolveProviders || resolveSearchProviders
   const storeResponse = deps.storeResponse || tryStoreWebResponse
 
-  return {
+  return applyPromptGuidance({
     name: 'web_search',
     label: 'Web Search',
     description:
@@ -612,7 +613,7 @@ export function createWebSearchTool(
 
       return new Text(text, 0, 0)
     },
-  }
+  })
 }
 
 export function registerWebSearchTool(pi: ExtensionAPI) {

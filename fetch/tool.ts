@@ -1,4 +1,5 @@
 import { formatSize } from '@mariozechner/pi-coding-agent'
+import { applyPromptGuidance } from '../config.ts'
 import { rmSync } from 'node:fs'
 import { StringEnum } from '@mariozechner/pi-ai'
 import { Text } from '@mariozechner/pi-tui'
@@ -412,7 +413,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
   const jinaFetcher = deps.jinaFetcher || fetchViaJinaReader
   const pdfTextExtractor = deps.pdfTextExtractor || extractPdfText
 
-  return {
+  return applyPromptGuidance({
     name: 'web_fetch',
     label: 'Web Fetch',
     description:
@@ -958,7 +959,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
 
       return new Text(text, 0, 0)
     },
-  }
+  })
 }
 
 function buildBatchSummaryText(details: BatchFetchDetails) {
@@ -1028,7 +1029,7 @@ export function createBatchWebFetchTool(
 ) {
   const singleFetchTool = createWebFetchTool(deps)
 
-  return {
+  return applyPromptGuidance({
     name: 'batch_web_fetch',
     label: 'Batch Web Fetch',
     description:
@@ -1238,5 +1239,5 @@ export function createBatchWebFetchTool(
 
       return createResponsiveBatchResultComponent(details, expanded, theme)
     },
-  }
+  })
 }

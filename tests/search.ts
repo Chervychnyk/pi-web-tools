@@ -12,6 +12,7 @@ import {
   dedupeResults,
 } from '../providers/shared.ts'
 import { parseSearXngResults } from '../providers/searxng.ts'
+import { applyPromptGuidance } from '../config.ts'
 import { resolveSearchProvider, resolveSearchProviders } from '../providers/index.ts'
 import { SEARCH_PROVIDER_NAMES } from '../providers/types.ts'
 import { getStoredWebResponse } from '../storage.ts'
@@ -141,10 +142,65 @@ function testProviderResolution() {
       .name,
     'searxng',
   )
+  assert.equal(
+    resolveSearchProvider(undefined, {}, { provider: 'brave', apiKeys: { brave: 'from-config' } }).name,
+    'brave',
+  )
+  assert.equal(
+    resolveSearchProvider(undefined, { PI_WEB_SEARCH_PROVIDER: 'duckduckgo' }, { provider: 'brave', apiKeys: { brave: 'from-config' } }).name,
+    'duckduckgo',
+  )
+  assert.deepEqual(
+    resolveSearchProviders(undefined, {}, {
+      apiKeys: { brave: 'from-config', kagi: 'from-config' },
+      baseUrls: { searxng: 'https://searx.test' },
+    }).map((provider) => provider.name),
+    ['brave', 'kagi', 'searxng', 'duckduckgo'],
+  )
   assert.throws(
     () => resolveSearchProvider('nope' as never, {}),
     /Unknown search provider/,
   )
+}
+
+function testPromptGuidanceOverrides() {
+  const tool = applyPromptGuidance(
+    {
+      name: 'web_search',
+      promptSnippet: 'default snippet',
+      promptGuidelines: ['default guideline'],
+    },
+    {
+      guidance: {
+        web_search: {
+          promptSnippet: 'configured snippet',
+          promptGuidelines: ['configured guideline'],
+        },
+      },
+    },
+  )
+
+  assert.equal(tool.promptSnippet, 'configured snippet')
+  assert.deepEqual(tool.promptGuidelines, ['configured guideline'])
+
+  const invalid = applyPromptGuidance(
+    {
+      name: 'web_fetch',
+      promptSnippet: 'default snippet',
+      promptGuidelines: ['default guideline'],
+    },
+    {
+      guidance: {
+        web_fetch: {
+          promptSnippet: '',
+          promptGuidelines: [],
+        },
+      },
+    },
+  )
+
+  assert.equal(invalid.promptSnippet, 'default snippet')
+  assert.deepEqual(invalid.promptGuidelines, ['default guideline'])
 }
 
 async function testWebSearchExecutePaths() {
@@ -319,6 +375,7 @@ async function testSearchPreviewCompaction() {
 export async function runSearchTests() {
   testSearchHelpers()
   testProviderResolution()
+  testPromptGuidanceOverrides()
   await testWebSearchExecutePaths()
   await testSearchBatchProviderMemoization()
   await testSearchPreviewCompaction()

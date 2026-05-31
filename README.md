@@ -18,6 +18,7 @@ It provides:
 This package keeps the useful parts of web access local and understandable:
 
 - provider-based web search with fallback
+- optional persisted provider configuration with env-var overrides
 - readable page fetch and extraction
 - persisted `responseId` retrieval to avoid context bloat
 - GitHub-aware fetches
@@ -220,6 +221,38 @@ Search provider environment variables:
 - `GOOGLE_CX`
 - `SEARXNG_URL`
 
+You can also run `/web-search-config` in an interactive Pi session to write persisted search settings to `~/.config/pi-web-tools/config.json` with file mode `0600`. Environment variables take precedence over persisted values.
+
+Example config:
+
+```json
+{
+  "provider": "brave",
+  "apiKeys": {
+    "brave": "...",
+    "kagi": "...",
+    "google": "...",
+    "googleCx": "..."
+  },
+  "baseUrls": {
+    "searxng": "http://localhost:8080"
+  },
+  "guidance": {
+    "web_search": {
+      "promptSnippet": "Search current public documentation",
+      "promptGuidelines": [
+        "Use this only when current external facts are needed."
+      ]
+    },
+    "web_fetch": {
+      "promptSnippet": "Fetch and extract a specific URL"
+    }
+  }
+}
+```
+
+`guidance` entries are optional per-tool overrides for `promptSnippet` and `promptGuidelines`. Supported keys include `web_search`, `web_fetch`, and `batch_web_fetch`.
+
 GitHub environment variables (optional, for higher API rate limits/private fallback access):
 
 - `GITHUB_TOKEN`
@@ -242,6 +275,12 @@ Behavior notes:
 - stored response files are pruned by both count and age
 - explicit cache dirs are respected as-is; fallback paths are only used when no explicit dir is configured
 - proxy endpoints are security-validated and must resolve to public addresses (localhost/private/link-local proxies are rejected)
+
+## Security note: `web_fetch` host guard
+
+`web_fetch` only supports `http` and `https` URLs and rejects loopback, private, link-local, multicast/reserved, and common metadata hostnames before making requests. Unlike simple host-literal guards, it validates DNS results through a guarded lookup path and re-validates redirect targets. Proxy endpoints are checked with the same public-address rules.
+
+This reduces SSRF risk for model-driven fetches, but it is still not a replacement for network-level egress controls in hostile automation environments.
 
 ## Storage and cache
 

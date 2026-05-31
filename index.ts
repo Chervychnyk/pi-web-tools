@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
+import { registerWebSearchConfigCommand } from './commands.ts'
 import { cleanupGitHubCache } from './github-support/cache.ts'
 import { registerGetWebContentTool } from './get-web-content.ts'
 import { registerListWebContentTool } from './list-web-content.ts'
@@ -10,6 +11,7 @@ export default function webToolsExtension(pi: ExtensionAPI) {
   registerWebFetchTool(pi)
   registerGetWebContentTool(pi)
   registerListWebContentTool(pi)
+  registerWebSearchConfigCommand(pi)
 
   pi.on('session_shutdown', () => {
     cleanupGitHubCache()
