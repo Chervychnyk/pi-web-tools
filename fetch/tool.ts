@@ -298,28 +298,38 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       if (isPartial) return new Text(theme.fg('warning', 'Fetching...'), 0, 0)
 
       const details = (result.details || {}) as FetchDetails
-      let text = ''
+      const sep = theme.fg('dim', ' · ')
+      let text = theme.fg('success', '✓ ')
 
       if (details.isImage) {
-        text += theme.fg(
-          'success',
-          `Image ${details.imageMimeType || ''}`.trim(),
-        )
+        text += theme.fg('success', 'image')
+        if (details.imageMimeType) {
+          text += sep + theme.fg('muted', details.imageMimeType)
+        }
         if (details.imageSize) {
-          text += theme.fg('dim', ` (${formatSize(details.imageSize)})`)
+          text += sep + theme.fg('dim', formatSize(details.imageSize))
         }
       } else if (details.isFile) {
-        text += theme.fg('success', 'file downloaded')
+        text += theme.fg('success', 'file')
         if (details.fileName) {
-          text += ` ${theme.fg('accent', truncateText(details.fileName, 80))}`
+          text += sep + theme.fg('accent', truncateText(details.fileName, 80))
         }
         if (details.fileSize !== undefined) {
-          text += theme.fg('dim', ` (${formatSize(details.fileSize)})`)
+          text += sep + theme.fg('dim', formatSize(details.fileSize))
         }
+      } else if (details.githubType) {
+        text += theme.fg('success', 'github')
+        if (details.title) {
+          text += sep + theme.fg('accent', truncateText(details.title, 80))
+        }
+        const ghLabel = details.githubSource
+          ? `${details.githubType} via ${details.githubSource}`
+          : details.githubType
+        text += sep + theme.fg('muted', ghLabel)
       } else {
         text += theme.fg('success', details.format || 'fetched')
         if (details.title) {
-          text += ` ${theme.fg('accent', truncateText(details.title, 80))}`
+          text += sep + theme.fg('accent', truncateText(details.title, 80))
         }
       }
 

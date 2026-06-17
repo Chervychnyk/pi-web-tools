@@ -136,10 +136,11 @@ export function createListWebContentTool(
         return new Text(theme.fg('warning', 'Listing stored content...'), 0, 0)
       }
       const details = (result.details || {}) as ListWebContentDetails
+      const sep = theme.fg('dim', ' · ')
       let text = details.count > 0
-        ? theme.fg('success', `${details.count} stored responses`)
-        : theme.fg('dim', 'No stored responses')
-      if (details.kind) text += ` ${theme.fg('muted', `kind=${details.kind}`)}`
+        ? `${theme.fg('success', '✓ ')}${theme.fg('success', `${details.count} stored`)}`
+        : `${theme.fg('dim', '· ')}${theme.fg('dim', 'no stored responses')}`
+      if (details.kind) text += sep + theme.fg('muted', `kind=${details.kind}`)
       const first = details.items?.[0]
       if (first) {
         text += `\n${theme.fg('muted', `${first.responseId}: ${truncateText(first.source, 100)}`)}`

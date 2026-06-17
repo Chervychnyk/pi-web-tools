@@ -305,10 +305,11 @@ export function createGetWebContentTool(
       }
 
       const details = (result.details || {}) as GetWebContentDetails
-      let text = theme.fg(
-        'success',
-        `${details.kind} content ${details.returnedLines}/${details.totalLines} lines`,
-      )
+      const sep = theme.fg('dim', ' · ')
+      let text = theme.fg('success', '✓ ')
+      text += theme.fg('success', details.kind)
+      text += sep
+      text += theme.fg('dim', `${details.returnedLines}/${details.totalLines} lines`)
 
       text += renderBadges(theme, {
         truncated: details.truncated,
@@ -316,12 +317,12 @@ export function createGetWebContentTool(
       })
 
       if (details.selectedQuery) {
-        text += ` ${theme.fg('accent', truncateText(details.selectedQuery, 48))}`
+        text += sep + theme.fg('accent', truncateText(details.selectedQuery, 48))
       }
-      text += ` ${theme.fg('muted', details.responseId)}`
+      text += sep + theme.fg('muted', details.responseId)
 
       if (details.hasMore && details.nextOffset) {
-        text += ` ${theme.fg('warning', `next=${details.nextOffset}`)}`
+        text += sep + theme.fg('warning', `next=${details.nextOffset}`)
       }
 
       if (expanded) {

@@ -527,28 +527,28 @@ export function createWebSearchTool(
       const details = (result.details || {}) as SearchDetails
       const queryCount = details.queryResults?.length || details.queries?.length || 0
       const isMultiQuery = queryCount > 1
+      const sep = theme.fg('dim', ' · ')
 
-      let text = details.aborted
-        ? theme.fg('warning', 'Search aborted')
-        : details.count
-          ? theme.fg(
-              'success',
-              isMultiQuery
-                ? `${details.count} results across ${queryCount} queries`
-                : `${details.count} results`,
-            )
-          : theme.fg(
-              'dim',
-              isMultiQuery
-                ? `No results across ${queryCount} queries`
-                : 'No results found',
-            )
+      let text: string
+      if (details.aborted) {
+        text = `${theme.fg('warning', '✗ ')}${theme.fg('warning', 'aborted')}`
+      } else if (details.count) {
+        const summary = isMultiQuery
+          ? `${details.count} results across ${queryCount} queries`
+          : `${details.count} results`
+        text = `${theme.fg('success', '✓ ')}${theme.fg('success', summary)}`
+      } else {
+        const summary = isMultiQuery
+          ? `no results across ${queryCount} queries`
+          : 'no results'
+        text = `${theme.fg('dim', '· ')}${theme.fg('dim', summary)}`
+      }
 
       if (details.provider) {
-        text += ` ${theme.fg('muted', `via ${details.provider}`)}`
+        text += sep + theme.fg('muted', `via ${details.provider}`)
       }
       if (details.cached && details.cacheAgeMs !== undefined) {
-        text += ` ${theme.fg('dim', `(cache ${details.cacheAgeMs}ms old)`)}`
+        text += sep + theme.fg('dim', `cache ${details.cacheAgeMs}ms old`)
       }
       text += renderBadges(theme, details)
 
