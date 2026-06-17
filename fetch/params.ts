@@ -1,5 +1,6 @@
 import { readWebToolsConfig } from '../config.ts'
-import { DEFAULT_TIMEOUT, buildCacheKey } from '../shared.ts'
+import { DEFAULT_TIMEOUT } from '../utils/abort.ts'
+import { buildCacheKey } from '../utils/cache.ts'
 import type {
   FetchOutputFormat,
   ParsedBatchFetchParams,

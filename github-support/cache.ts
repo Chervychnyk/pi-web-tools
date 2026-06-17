@@ -11,7 +11,7 @@ import {
   DEFAULT_WEB_TOOLS_CACHE_DIR,
   FALLBACK_WEB_TOOLS_CACHE_DIR,
   resolveWritableCacheDir,
-} from '../shared.ts'
+} from '../utils/writable-dir.ts'
 import { cloneGitHubRepo } from './git.ts'
 import type {
   EnsureGitHubCloneResult,

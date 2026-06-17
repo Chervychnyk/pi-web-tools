@@ -11,13 +11,9 @@ import { SEARCH_PROVIDER_NAMES } from './types.ts'
 export { MAX_SEARCH_LIMIT, clampSearchLimit }
 export { SEARCH_PROVIDER_NAMES }
 export type {
-  BraveResponse,
-  GoogleResponse,
-  KagiResponse,
   SearchProvider,
   SearchProviderName,
   SearchResultItem,
-  SearXngResponse,
 } from './types.ts'
 
 function isProviderName(value: string): value is SearchProviderName {

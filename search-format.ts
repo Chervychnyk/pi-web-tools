@@ -1,6 +1,6 @@
 import type { SearchResultItem } from './providers/index.ts'
 import type { StoredSearchResponse, StoredSearchQuery } from './storage.ts'
-import { truncateText } from './shared.ts'
+import { truncateText } from './utils/truncate.ts'
 
 export type SearchTextFormatOptions = {
   queryLimit?: number

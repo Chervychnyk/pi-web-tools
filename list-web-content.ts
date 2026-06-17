@@ -2,7 +2,9 @@ import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
 import { StringEnum } from '@mariozechner/pi-ai'
 import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
-import { pluralize, renderToolCallHeader, truncateText } from './shared.ts'
+import { pluralize } from './shared.ts'
+import { truncateText } from './utils/truncate.ts'
+import { renderToolCallHeader } from './utils/ui.ts'
 import { listStoredWebResponses, type StoredWebResponse } from './storage.ts'
 
 export type ListedWebContentItem = {

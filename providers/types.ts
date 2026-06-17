@@ -24,39 +24,3 @@ export type SearchProvider = {
     signal: AbortSignal,
   ) => Promise<SearchResultItem[]>
 }
-
-export type BraveResponse = {
-  web?: {
-    results?: Array<{
-      title?: string
-      url?: string
-      description?: string
-      snippet?: string
-    }>
-  }
-}
-
-export type KagiResponse = {
-  data?: Array<{
-    title?: string
-    url?: string
-    snippet?: string
-    description?: string
-  }>
-}
-
-export type GoogleResponse = {
-  items?: Array<{
-    title?: string
-    link?: string
-    snippet?: string
-  }>
-}
-
-export type SearXngResponse = {
-  results?: Array<{
-    title?: string
-    url?: string
-    content?: string
-  }>
-}

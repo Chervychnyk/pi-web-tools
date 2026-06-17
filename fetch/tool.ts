@@ -5,14 +5,10 @@ import { StringEnum } from '@mariozechner/pi-ai'
 import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
 import { fetchGitHubContent, parseGitHubUrl } from '../github.ts'
-import {
-  DEFAULT_TIMEOUT,
-  createAbortController,
-  getCachedValue,
-  renderBadges,
-  renderToolCallHeader,
-  truncateText,
-} from '../shared.ts'
+import { DEFAULT_TIMEOUT, createAbortController } from '../utils/abort.ts'
+import { getCachedValue } from '../utils/cache.ts'
+import { truncateText } from '../utils/truncate.ts'
+import { renderBadges, renderToolCallHeader } from '../utils/ui.ts'
 import { classifyFetchResponse } from './classify.ts'
 import { extensionForFormat } from './content.ts'
 import { extractFetchContent } from './extract.ts'

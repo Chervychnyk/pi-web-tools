@@ -1,8 +1,19 @@
-import { SEARCH_USER_AGENT, dedupeResults, parseJsonResponse } from './shared.ts'
-import type { KagiResponse, SearchProvider } from './types.ts'
+import { createJsonSearchProvider } from './json-search.ts'
+import { dedupeResults } from './shared.ts'
+import type { SearchProvider } from './types.ts'
 
-export function parseKagiResults(json: KagiResponse, limit: number) {
-  const items = Array.isArray(json.data) ? json.data : []
+type KagiResponse = {
+  data?: Array<{
+    title?: string
+    url?: string
+    snippet?: string
+    description?: string
+  }>
+}
+
+export function parseKagiResults(json: unknown, limit: number) {
+  const data = json as KagiResponse
+  const items = Array.isArray(data.data) ? data.data : []
   return dedupeResults(
     items.map((item) => ({
       title: item.title || '',
@@ -14,28 +25,13 @@ export function parseKagiResults(json: KagiResponse, limit: number) {
 }
 
 export function createKagiProvider(apiKey: string): SearchProvider {
-  return {
+  return createJsonSearchProvider({
     name: 'kagi',
-    async search(query, limit, signal) {
-      const response = await fetch(
-        `https://kagi.com/api/v0/search?q=${encodeURIComponent(query)}&limit=${limit}`,
-        {
-          signal,
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bot ${apiKey}`,
-            'User-Agent': SEARCH_USER_AGENT,
-          },
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(
-          `Kagi search failed: ${response.status} ${response.statusText}`,
-        )
-      }
-
-      return parseKagiResults(await parseJsonResponse<KagiResponse>(response), limit)
-    },
-  }
+    errorLabel: 'Kagi',
+    buildRequest: (query, limit) => ({
+      url: `https://kagi.com/api/v0/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+      headers: { Authorization: `Bot ${apiKey}` },
+    }),
+    parseResponse: parseKagiResults,
+  })
 }

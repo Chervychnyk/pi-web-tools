@@ -15,7 +15,7 @@ import {
   FALLBACK_WEB_TOOLS_CACHE_DIR,
   getCacheDirCandidates,
   resolveWritableCacheDir,
-} from './shared.ts'
+} from './utils/writable-dir.ts'
 
 const RESPONSES_DIR_NAME = 'responses'
 const MAX_STORED_RESPONSES = 200

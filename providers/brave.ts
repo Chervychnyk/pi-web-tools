@@ -1,12 +1,21 @@
-import {
-  SEARCH_USER_AGENT,
-  dedupeResults,
-  parseJsonResponse,
-} from './shared.ts'
-import type { BraveResponse, SearchProvider } from './types.ts'
+import { createJsonSearchProvider } from './json-search.ts'
+import { dedupeResults } from './shared.ts'
+import type { SearchProvider } from './types.ts'
 
-export function parseBraveResults(json: BraveResponse, limit: number) {
-  const items = Array.isArray(json.web?.results) ? json.web.results : []
+type BraveResponse = {
+  web?: {
+    results?: Array<{
+      title?: string
+      url?: string
+      description?: string
+      snippet?: string
+    }>
+  }
+}
+
+export function parseBraveResults(json: unknown, limit: number) {
+  const data = json as BraveResponse
+  const items = Array.isArray(data.web?.results) ? data.web.results : []
   return dedupeResults(
     items.map((item) => ({
       title: item.title || '',
@@ -18,31 +27,13 @@ export function parseBraveResults(json: BraveResponse, limit: number) {
 }
 
 export function createBraveProvider(apiKey: string): SearchProvider {
-  return {
+  return createJsonSearchProvider({
     name: 'brave',
-    async search(query, limit, signal) {
-      const response = await fetch(
-        `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`,
-        {
-          signal,
-          headers: {
-            Accept: 'application/json',
-            'X-Subscription-Token': apiKey,
-            'User-Agent': SEARCH_USER_AGENT,
-          },
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(
-          `Brave search failed: ${response.status} ${response.statusText}`,
-        )
-      }
-
-      return parseBraveResults(
-        await parseJsonResponse<BraveResponse>(response),
-        limit,
-      )
-    },
-  }
+    errorLabel: 'Brave',
+    buildRequest: (query, limit) => ({
+      url: `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`,
+      headers: { 'X-Subscription-Token': apiKey },
+    }),
+    parseResponse: parseBraveResults,
+  })
 }

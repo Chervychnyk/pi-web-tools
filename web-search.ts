@@ -4,18 +4,11 @@ import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
 import { applyPromptGuidance } from './config.ts'
 import { formatSearchResponseText } from './search-format.ts'
-import {
-  DEFAULT_TIMEOUT,
-  appendStoredResponseNote,
-  buildCacheKey,
-  createAbortController,
-  getCachedValue,
-  renderBadges,
-  renderToolCallHeader,
-  setCachedValue,
-  truncateForModel,
-  truncateText,
-} from './shared.ts'
+import { appendStoredResponseNote } from './shared.ts'
+import { DEFAULT_TIMEOUT, createAbortController } from './utils/abort.ts'
+import { buildCacheKey, getCachedValue, setCachedValue } from './utils/cache.ts'
+import { truncateForModel, truncateText } from './utils/truncate.ts'
+import { renderBadges, renderToolCallHeader } from './utils/ui.ts'
 import {
   MAX_SEARCH_LIMIT,
   SEARCH_PROVIDER_NAMES,

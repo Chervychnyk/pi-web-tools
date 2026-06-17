@@ -2,7 +2,8 @@ import type { ExtensionAPI } from '@mariozechner/pi-coding-agent'
 import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
 import { formatStoredSearchResponseText } from './search-format.ts'
-import { renderBadges, renderToolCallHeader, truncateForModel, truncateText } from './shared.ts'
+import { truncateForModel, truncateText } from './utils/truncate.ts'
+import { renderBadges, renderToolCallHeader } from './utils/ui.ts'
 import {
   DEFAULT_CONTENT_SLICE_LIMIT,
   getStoredWebResponse,

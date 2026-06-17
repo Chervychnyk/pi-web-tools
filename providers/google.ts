@@ -1,8 +1,18 @@
-import { SEARCH_USER_AGENT, dedupeResults, parseJsonResponse } from './shared.ts'
-import type { GoogleResponse, SearchProvider } from './types.ts'
+import { createJsonSearchProvider } from './json-search.ts'
+import { dedupeResults } from './shared.ts'
+import type { SearchProvider } from './types.ts'
 
-export function parseGoogleResults(json: GoogleResponse, limit: number) {
-  const items = Array.isArray(json.items) ? json.items : []
+type GoogleResponse = {
+  items?: Array<{
+    title?: string
+    link?: string
+    snippet?: string
+  }>
+}
+
+export function parseGoogleResults(json: unknown, limit: number) {
+  const data = json as GoogleResponse
+  const items = Array.isArray(data.items) ? data.items : []
   return dedupeResults(
     items.map((item) => ({
       title: item.title || '',
@@ -14,30 +24,12 @@ export function parseGoogleResults(json: GoogleResponse, limit: number) {
 }
 
 export function createGoogleProvider(apiKey: string, cx: string): SearchProvider {
-  return {
+  return createJsonSearchProvider({
     name: 'google',
-    async search(query, limit, signal) {
-      const response = await fetch(
-        `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(query)}&num=${Math.min(limit, 10)}`,
-        {
-          signal,
-          headers: {
-            Accept: 'application/json',
-            'User-Agent': SEARCH_USER_AGENT,
-          },
-        },
-      )
-
-      if (!response.ok) {
-        throw new Error(
-          `Google search failed: ${response.status} ${response.statusText}`,
-        )
-      }
-
-      return parseGoogleResults(
-        await parseJsonResponse<GoogleResponse>(response),
-        limit,
-      )
-    },
-  }
+    errorLabel: 'Google',
+    buildRequest: (query, limit) => ({
+      url: `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(query)}&num=${Math.min(limit, 10)}`,
+    }),
+    parseResponse: parseGoogleResults,
+  })
 }

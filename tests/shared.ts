@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
+import { appendStoredResponseNote } from '../shared.ts'
 import {
-  appendStoredResponseNote,
   buildCacheKey,
   getCachedValue,
   setCachedValue,
-} from '../shared.ts'
+} from '../utils/cache.ts'
 
 function testCacheHelpers() {
   const keyA = buildCacheKey({ b: 2, a: 1, list: ['x', { z: 1, y: 2 }] })
