@@ -1,241 +1,40 @@
-import { formatSize } from '@mariozechner/pi-coding-agent'
-import { applyPromptGuidance } from '../config.ts'
-import { rmSync } from 'node:fs'
 import { StringEnum } from '@mariozechner/pi-ai'
+import { formatSize } from '@mariozechner/pi-coding-agent'
 import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
-import { fetchGitHubContent, parseGitHubUrl } from '../github.ts'
+import { applyPromptGuidance } from '../config.ts'
+import type { fetchGitHubContent } from '../github.ts'
 import { DEFAULT_TIMEOUT, createAbortController } from '../utils/abort.ts'
 import { getCachedValue } from '../utils/cache.ts'
 import { truncateText } from '../utils/truncate.ts'
 import { renderBadges, renderToolCallHeader } from '../utils/ui.ts'
-import { classifyFetchResponse } from './classify.ts'
-import { extensionForFormat } from './content.ts'
-import { extractFetchContent } from './extract.ts'
+import {
+  buildWebFetchErrorMessage,
+  mapUnknownError,
+} from './errors.ts'
+import { createGitHubHandler } from './handlers/github.ts'
+import { createDefaultHttpHandler } from './handlers/http.ts'
+import {
+  MAX_HTML_BYTES,
+  extractPdfText,
+  fetchViaJinaReader,
+  fetchWithOptionalCloudflareRetry,
+} from './network.ts'
 import {
   buildFetchCacheKey,
   parseBatchFetchParams,
   parseFetchParams,
 } from './params.ts'
 import { emitFetchProgress } from './progress.ts'
-import {
-  buildFileFetchResult,
-  buildImageFetchResult,
-  buildTextFetchResult,
-  composeFetchTextOutput,
-} from './result.ts'
-import {
-  decodeContentEncoding,
-  extractPdfText,
-  fetchViaJinaReader,
-  fetchWithOptionalCloudflareRetry,
-  MAX_HTML_BYTES,
-  shouldApplyHtmlGuard,
-  shouldUseJinaFallbackForStatus,
-} from './network.ts'
 import type {
   BatchFetchDetails,
   BatchFetchItemSummary,
   FetchDetails,
-  FetchErrorCode,
-  FetchErrorPhase,
-  FetchOutputFormat,
   FetchToolContent,
 } from './types.ts'
+import type { FetchResult, UrlHandler } from './url-handler.ts'
 
-const LARGE_RESPONSE_WARNING_BYTES = 1 * 1024 * 1024
 const DEFAULT_BATCH_CONCURRENCY = 4
-
-type WebFetchErrorMeta = {
-  code: FetchErrorCode
-  phase: FetchErrorPhase
-  retryable: boolean
-  statusCode?: number
-  statusText?: string
-  url?: string
-  finalUrl?: string
-}
-
-class WebFetchError extends Error {
-  readonly meta: WebFetchErrorMeta
-
-  constructor(message: string, meta: WebFetchErrorMeta) {
-    super(message)
-    this.name = 'WebFetchError'
-    this.meta = meta
-  }
-}
-
-function getWebFetchErrorHint(error: WebFetchError) {
-  if (error.meta.code === 'timeout') return 'Next: retry with a larger timeout or a narrower URL.'
-  if (error.meta.code === 'http_error' && (error.meta.statusCode === 403 || error.meta.statusCode === 429)) {
-    return 'Next: retry later, use refresh=true, or use an allowed proxy/header if appropriate.'
-  }
-  if (error.meta.code === 'response_too_large') return 'Next: use a CSS selector, maxChars, or fetch a more specific page.'
-  if (error.meta.code === 'invalid_request' && /selector/i.test(error.message)) {
-    return 'Next: retry without selector or inspect the page with format=html.'
-  }
-  if (error.meta.code === 'fallback_error') return 'Next: retry the original URL directly or fetch a more specific source URL.'
-  return undefined
-}
-
-function buildWebFetchErrorMessage(error: WebFetchError) {
-  const parts = [
-    `[web_fetch_error] code=${error.meta.code}`,
-    `phase=${error.meta.phase}`,
-    `retryable=${error.meta.retryable}`,
-  ]
-
-  if (error.meta.statusCode !== undefined) {
-    parts.push(`status=${error.meta.statusCode}`)
-  }
-  if (error.meta.statusText) {
-    parts.push(`statusText=${encodeURIComponent(error.meta.statusText)}`)
-  }
-  if (error.meta.url) {
-    parts.push(`url=${encodeURIComponent(error.meta.url)}`)
-  }
-  if (error.meta.finalUrl) {
-    parts.push(`finalUrl=${encodeURIComponent(error.meta.finalUrl)}`)
-  }
-
-  const hint = getWebFetchErrorHint(error)
-  return [error.message, hint, parts.join(' ')].filter(Boolean).join('\n')
-}
-
-function createWebFetchError(
-  message: string,
-  meta: WebFetchErrorMeta,
-): WebFetchError {
-  return new WebFetchError(message, meta)
-}
-
-function mapUnknownError(
-  error: unknown,
-  url?: string,
-  finalUrl?: string,
-): WebFetchError {
-  if (error instanceof WebFetchError) return error
-
-  const message = error instanceof Error ? error.message : String(error)
-
-  const structuredMatch = message.match(/\[web_fetch_error\]\s+([^\n]+)/)
-  if (structuredMatch) {
-    const attrs = Object.fromEntries(
-      structuredMatch[1]!
-        .split(/\s+/)
-        .map((pair) => pair.split('=').slice(0, 2))
-        .filter((parts) => parts.length === 2),
-    ) as Record<string, string>
-
-    const code = attrs.code as FetchErrorCode | undefined
-    const phase = attrs.phase as FetchErrorPhase | undefined
-    if (code && phase) {
-      const baseMessage = message.split('\n')[0] || message
-      const statusCode = attrs.status ? Number.parseInt(attrs.status, 10) : undefined
-
-      return createWebFetchError(baseMessage, {
-        code,
-        phase,
-        retryable: attrs.retryable === 'true',
-        statusCode: Number.isFinite(statusCode) ? statusCode : undefined,
-        statusText: attrs.statusText
-          ? decodeURIComponent(attrs.statusText)
-          : undefined,
-        url: attrs.url ? decodeURIComponent(attrs.url) : url,
-        finalUrl: attrs.finalUrl ? decodeURIComponent(attrs.finalUrl) : finalUrl,
-      })
-    }
-  }
-
-  if (/timed out/i.test(message)) {
-    return createWebFetchError(message, {
-      code: 'timeout',
-      phase: 'network',
-      retryable: true,
-      url,
-      finalUrl,
-    })
-  }
-
-  if (/^Invalid URL:/.test(message) || /^Unsupported protocol:/.test(message)) {
-    return createWebFetchError(message, {
-      code: 'invalid_request',
-      phase: 'resolve',
-      retryable: false,
-      url,
-      finalUrl,
-    })
-  }
-
-  if (/Selector is not supported/i.test(message)) {
-    return createWebFetchError(message, {
-      code: 'invalid_request',
-      phase: 'resolve',
-      retryable: false,
-      url,
-      finalUrl,
-    })
-  }
-
-  if (/Response too large|HTML response too large/i.test(message)) {
-    return createWebFetchError(message, {
-      code: 'response_too_large',
-      phase: 'download',
-      retryable: false,
-      url,
-      finalUrl,
-    })
-  }
-
-  if (/Jina Reader fetch failed/i.test(message)) {
-    return createWebFetchError(message, {
-      code: 'fallback_error',
-      phase: 'extract',
-      retryable: true,
-      url,
-      finalUrl,
-    })
-  }
-
-  const httpMatch = message.match(/^Fetch failed: (\d{3})\s*(.*)$/)
-  if (httpMatch) {
-    const statusCode = Number.parseInt(httpMatch[1] || '0', 10)
-    const statusText = (httpMatch[2] || '').trim() || undefined
-    return createWebFetchError(message, {
-      code: 'http_error',
-      phase: 'response',
-      retryable: statusCode === 429 || statusCode >= 500,
-      statusCode,
-      statusText,
-      url,
-      finalUrl,
-    })
-  }
-
-  if (/Failed to decode response body|Unsupported content-encoding/i.test(message)) {
-    return createWebFetchError(message, {
-      code: 'processing_error',
-      phase: 'process',
-      retryable: false,
-      url,
-      finalUrl,
-    })
-  }
-
-  return createWebFetchError(message, {
-    code: 'network_error',
-    phase: 'unknown',
-    retryable: true,
-    url,
-    finalUrl,
-  })
-}
-
-function cleanupDownloadedFile(filePath: string | undefined): void {
-  if (!filePath) return
-  rmSync(filePath, { force: true })
-}
 
 function statusToProgress(status: BatchFetchItemSummary['status']) {
   switch (status) {
@@ -262,10 +61,7 @@ function truncateMiddle(value: string, width: number) {
   return `${value.slice(0, left)}…${value.slice(value.length - right)}`
 }
 
-function buildProgressBar(
-  progress: number,
-  width: number,
-) {
+function buildProgressBar(progress: number, width: number) {
   const bounded = Math.max(0, Math.min(1, progress))
   const cells = Math.max(6, width)
   const filled = Math.max(0, Math.min(cells, Math.round(cells * bounded)))
@@ -317,97 +113,25 @@ function renderBatchRows(
 }
 
 export type WebFetchDependencies = {
+  // Custom handlers prepended to the default HTTP handler. The default list
+  // is [GitHubHandler]; pass urlHandlers to replace it. The HTTP handler is
+  // always appended last and cannot be overridden through this field.
+  urlHandlers: UrlHandler[]
   githubFetcher: typeof fetchGitHubContent
   networkFetcher: typeof fetchWithOptionalCloudflareRetry
   jinaFetcher: typeof fetchViaJinaReader
   pdfTextExtractor: typeof extractPdfText
 }
 
-function canUseTextLikeFetchFormat(format: FetchOutputFormat | undefined) {
-  return format === undefined || format === 'markdown' || format === 'text'
-}
-
-function buildGitHubFetchResult(options: {
-  githubContent: NonNullable<Awaited<ReturnType<typeof fetchGitHubContent>>>
-  requestedFormat: FetchOutputFormat | undefined
-  maxChars: number | undefined
-  cacheKey: string
-  requestUrl: string
-}) {
-  const { githubContent, requestedFormat, maxChars, cacheKey, requestUrl } = options
-  const format = requestedFormat ?? 'markdown'
-
-  return buildTextFetchResult(
-    githubContent.text,
-    '.md',
-    maxChars,
-    cacheKey,
-    requestUrl,
-    {
-      url: githubContent.finalUrl,
-      format,
-      githubType: githubContent.githubType,
-      githubSource: githubContent.githubSource,
-      githubLocalPath: githubContent.githubLocalPath,
-      title: githubContent.title,
-      contentType: githubContent.contentType,
-      cached: false,
-      cacheAgeMs: 0,
-    },
-  )
-}
-
-function validateGitHubRequest(
-  isGitHubUrl: boolean,
-  selector: string | undefined,
-  requestedFormat: FetchOutputFormat | undefined,
-) {
-  if (!isGitHubUrl) return
-
-  if (selector) {
-    throw new Error('Selector is not supported for GitHub repository URLs')
-  }
-  if (!canUseTextLikeFetchFormat(requestedFormat)) {
-    throw new Error(
-      `GitHub repository URLs only support markdown or text output, received: ${requestedFormat}`,
-    )
-  }
-}
-
-function validateResponseCompatibility(options: {
-  selector: string | undefined
-  format: FetchOutputFormat
-  isHtml: boolean
-  isJson: boolean
-  isPdf: boolean
-  mimeType: string
-}) {
-  const { selector, format, isHtml, isJson, isPdf, mimeType } = options
-
-  if (isPdf && selector) {
-    throw new Error('Selector is not supported for PDF output')
-  }
-  if (isPdf && !['markdown', 'text'].includes(format)) {
-    throw new Error(
-      `PDF content only supports markdown or text output, received: ${format}`,
-    )
-  }
-  if (selector && !isHtml) {
-    if (isJson || format === 'json') {
-      throw new Error('Selector is not supported for json output')
-    }
-
-    throw new Error(
-      `Selector is only supported for HTML responses, received: ${mimeType || 'unknown'}`,
-    )
-  }
-}
-
 export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
-  const githubFetcher = deps.githubFetcher || fetchGitHubContent
-  const networkFetcher = deps.networkFetcher || fetchWithOptionalCloudflareRetry
-  const jinaFetcher = deps.jinaFetcher || fetchViaJinaReader
-  const pdfTextExtractor = deps.pdfTextExtractor || extractPdfText
+  const prependedHandlers: UrlHandler[] =
+    deps.urlHandlers ?? [createGitHubHandler(deps.githubFetcher)]
+  const httpHandler = createDefaultHttpHandler({
+    networkFetcher: deps.networkFetcher,
+    jinaFetcher: deps.jinaFetcher,
+    pdfTextExtractor: deps.pdfTextExtractor,
+  })
+  const handlers: UrlHandler[] = [...prependedHandlers, httpHandler]
 
   return applyPromptGuidance({
     name: 'web_fetch',
@@ -505,334 +229,48 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
         parsed.timeoutMs,
         signal,
       )
-      let downloadedFilePathForCleanup: string | undefined
+
+      // Dispatch: first matching handler whose validate passes runs.
+      // Returning null from fetch falls through to the next matching handler.
+      // The HTTP handler always matches and never returns null, so dispatch
+      // is total. depth>1 catches re-dispatch loops; same-handler short-circuits.
+      const runHandler = async (
+        url: URL,
+        depth: number,
+        strict: boolean,
+      ): Promise<FetchResult | null> => {
+        if (depth > 1) throw new Error('UrlHandler dispatch loop')
+        for (const handler of handlers) {
+          if (!handler.match(url)) continue
+          try {
+            handler.validate(parsed)
+          } catch (error) {
+            if (strict) throw error
+            continue
+          }
+          const result = await handler.fetch({
+            url,
+            parsed,
+            signal: controller.signal,
+            onUpdate,
+            cacheKey,
+            dispatch: async (next) => {
+              const target = handlers.find((h) => h.match(next))
+              if (target === handler) return null
+              return runHandler(next, depth + 1, false)
+            },
+          })
+          if (result !== null) return result
+        }
+        return null
+      }
 
       try {
-        const githubUrl = parseGitHubUrl(parsed.url)
-        validateGitHubRequest(Boolean(githubUrl), parsed.selector, parsed.requestedFormat)
-
-        const githubContent = await githubFetcher(
-          parsed.url,
-          controller.signal,
-          onUpdate,
-          parsed.refresh,
-        )
-        if (githubContent) {
-          return buildGitHubFetchResult({
-            githubContent,
-            requestedFormat: parsed.requestedFormat,
-            maxChars: parsed.maxChars,
-            cacheKey,
-            requestUrl: parsed.url,
-          })
+        const result = await runHandler(parsed.parsedUrl, 0, true)
+        if (!result) {
+          throw new Error(`No handler produced a result for ${parsed.url}`)
         }
-
-        emitFetchProgress(
-          onUpdate,
-          'network',
-          `Requesting ${parsed.parsedUrl.hostname}...`,
-        )
-
-        const { response, cloudflareBypassed } = await networkFetcher(
-          parsed.parsedUrl,
-          controller.signal,
-          onUpdate,
-          undefined,
-          {
-            headers: parsed.headers,
-            proxy: parsed.proxy,
-          },
-        )
-        downloadedFilePathForCleanup = response.downloadedFilePath
-
-        emitFetchProgress(
-          onUpdate,
-          'response',
-          `Received ${response.status} ${response.statusText || ''}`.trim(),
-        )
-
-        if (!response.ok) {
-          const nonOkFinalUrl = response.url || parsed.parsedUrl.toString()
-
-          if (
-            !parsed.selector &&
-            canUseTextLikeFetchFormat(parsed.requestedFormat) &&
-            shouldUseJinaFallbackForStatus(response.status)
-          ) {
-            const jina = await jinaFetcher(
-              new URL(nonOkFinalUrl),
-              controller.signal,
-              onUpdate,
-              undefined,
-              { proxy: parsed.proxy },
-            )
-            const jinaFormat = parsed.requestedFormat ?? 'markdown'
-            cleanupDownloadedFile(downloadedFilePathForCleanup)
-            downloadedFilePathForCleanup = undefined
-            return buildTextFetchResult(
-              jina.content,
-              extensionForFormat(jinaFormat),
-              parsed.maxChars,
-              cacheKey,
-              parsed.url,
-              {
-                url: nonOkFinalUrl,
-                format: jinaFormat,
-                status: response.status,
-                statusText: response.statusText,
-                contentType: 'text/markdown; charset=utf-8',
-                jinaFallbackUsed: true,
-                cached: false,
-                cacheAgeMs: 0,
-              },
-            )
-          }
-
-          throw createWebFetchError(
-            `Fetch failed: ${response.status} ${response.statusText}`,
-            {
-              code: 'http_error',
-              phase: 'response',
-              retryable: response.status === 429 || response.status >= 500,
-              statusCode: response.status,
-              statusText: response.statusText,
-              url: parsed.url,
-              finalUrl: nonOkFinalUrl,
-            },
-          )
-        }
-
-        const classification = classifyFetchResponse(
-          response,
-          parsed.parsedUrl,
-          parsed.requestedFormat,
-        )
-
-        const redirectedGithubUrl = !githubUrl
-          ? parseGitHubUrl(classification.finalUrl)
-          : null
-        if (
-          redirectedGithubUrl &&
-          !parsed.selector &&
-          canUseTextLikeFetchFormat(parsed.requestedFormat)
-        ) {
-          emitFetchProgress(
-            onUpdate,
-            'github',
-            `Redirected to GitHub URL, switching to repository extraction for ${classification.finalUrl}`,
-          )
-
-          const redirectedGithubContent = await githubFetcher(
-            classification.finalUrl,
-            controller.signal,
-            onUpdate,
-            parsed.refresh,
-          )
-
-          if (redirectedGithubContent) {
-            return buildGitHubFetchResult({
-              githubContent: redirectedGithubContent,
-              requestedFormat: parsed.requestedFormat,
-              maxChars: parsed.maxChars,
-              cacheKey,
-              requestUrl: parsed.url,
-            })
-          }
-        }
-
-        validateResponseCompatibility({
-          selector: parsed.selector,
-          format: classification.format,
-          isHtml: classification.isHtml,
-          isJson: classification.isJson,
-          isPdf: classification.isPdf,
-          mimeType: classification.mimeType,
-        })
-
-        if (
-          classification.contentLength !== undefined &&
-          classification.contentLength > LARGE_RESPONSE_WARNING_BYTES
-        ) {
-          onUpdate?.({
-            content: [
-              {
-                type: 'text',
-                text: `Large response detected (${formatSize(classification.contentLength)}).`,
-              },
-            ],
-          })
-        }
-
-        if (
-          shouldApplyHtmlGuard(
-            classification.mimeType,
-            classification.format,
-            classification.contentLength,
-          )
-        ) {
-          throw createWebFetchError(
-            `HTML response too large to process safely: ${formatSize(classification.contentLength!)} (max ${formatSize(MAX_HTML_BYTES)})`,
-            {
-              code: 'response_too_large',
-              phase: 'download',
-              retryable: false,
-              url: parsed.url,
-              finalUrl: classification.finalUrl,
-            },
-          )
-        }
-
-        if (classification.isAttachment || classification.isBinary) {
-          const streamedSize =
-            response.downloadedFileSize ?? classification.contentLength ?? 0
-
-          emitFetchProgress(
-            onUpdate,
-            'download',
-            `Downloaded ${formatSize(streamedSize)} from ${new URL(classification.finalUrl).hostname}`,
-          )
-
-          const fileResult = buildFileFetchResult({
-            bodyBuffer: response.downloadedFilePath ? undefined : response.bodyBuffer,
-            existingFilePath: response.downloadedFilePath,
-            existingFileSize: response.downloadedFileSize,
-            finalUrl: classification.finalUrl,
-            mimeType: classification.mimeType,
-            contentDisposition: classification.contentDisposition,
-            details: {
-              url: classification.finalUrl,
-              format: classification.format,
-              title: null,
-              status: classification.status,
-              statusText: classification.statusText,
-              contentType: classification.contentType,
-              contentLength: classification.contentLength ?? streamedSize,
-              cloudflareBypassed,
-              cached: false,
-              cacheAgeMs: 0,
-              isImage: false,
-            },
-          })
-
-          downloadedFilePathForCleanup = undefined
-          return fileResult
-        }
-
-        const bodyBuffer = decodeContentEncoding(
-          response.bodyBuffer,
-          response.headers.get('content-encoding'),
-          {
-            url: classification.finalUrl,
-            mimeType: classification.mimeType,
-          },
-        )
-        const bodySize = bodyBuffer.byteLength
-
-        emitFetchProgress(
-          onUpdate,
-          'download',
-          `Downloaded ${formatSize(bodySize)} from ${new URL(classification.finalUrl).hostname}`,
-        )
-
-        if (
-          classification.isHtml &&
-          ['markdown', 'text', 'html'].includes(classification.format) &&
-          bodySize > MAX_HTML_BYTES
-        ) {
-          throw createWebFetchError(
-            `HTML response too large to process safely: ${formatSize(bodySize)} (max ${formatSize(MAX_HTML_BYTES)})`,
-            {
-              code: 'response_too_large',
-              phase: 'download',
-              retryable: false,
-              url: parsed.url,
-              finalUrl: classification.finalUrl,
-            },
-          )
-        }
-
-        if (classification.isImage || classification.format === 'image') {
-          if (!classification.isImage) {
-            throw createWebFetchError(
-              `Requested image output but received non-image content type: ${classification.mimeType || 'unknown'}`,
-              {
-                code: 'invalid_request',
-                phase: 'response',
-                retryable: false,
-                url: parsed.url,
-                finalUrl: classification.finalUrl,
-              },
-            )
-          }
-
-          return buildImageFetchResult(
-            bodyBuffer,
-            classification.mimeType,
-            classification.finalUrl,
-            classification.format,
-            bodySize,
-            {
-              url: classification.finalUrl,
-              format: classification.format,
-              title: null,
-              charLimited: false,
-              maxChars: undefined,
-              originalChars: 0,
-              isImage: true,
-              imageMimeType: classification.mimeType,
-              imageSize: bodySize,
-              status: classification.status,
-              statusText: classification.statusText,
-              contentType: classification.contentType,
-              contentLength: classification.contentLength ?? bodySize,
-              cloudflareBypassed,
-              cached: false,
-              cacheAgeMs: 0,
-            },
-          )
-        }
-
-        const extracted = await extractFetchContent({
-          bodyBuffer,
-          classification,
-          selector: parsed.selector,
-          signal: controller.signal,
-          onUpdate,
-          jinaFetcher,
-          pdfTextExtractor,
-          requestOptions: { proxy: parsed.proxy },
-        })
-
-        return buildTextFetchResult(
-          composeFetchTextOutput(
-            classification.format,
-            extracted.content,
-            extracted.article,
-          ),
-          extensionForFormat(classification.format),
-          parsed.maxChars,
-          cacheKey,
-          parsed.url,
-          {
-            url: classification.finalUrl,
-            format: classification.format,
-            title: extracted.article?.title,
-            byline: extracted.article?.byline,
-            siteName: extracted.article?.siteName,
-            excerpt: extracted.article?.excerpt,
-            selectedSelector: extracted.article?.selectedSelector,
-            extractionMethod: extracted.article?.extractionMethod,
-            status: classification.status,
-            statusText: classification.statusText,
-            contentType: classification.contentType,
-            contentLength: classification.contentLength ?? bodySize,
-            cloudflareBypassed,
-            jinaFallbackUsed: extracted.jinaFallbackUsed,
-            pdfExtracted: extracted.pdfExtracted,
-            cached: false,
-            cacheAgeMs: 0,
-          },
-        )
+        return result
       } catch (error) {
         try {
           rethrowIfAbort(error, 'Fetch request')
@@ -840,9 +278,9 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
           const mapped = mapUnknownError(normalized, parsed.url)
           throw new Error(buildWebFetchErrorMessage(mapped))
         }
+        throw error
       } finally {
         cleanup()
-        cleanupDownloadedFile(downloadedFilePathForCleanup)
       }
     },
     renderCall(args, theme) {

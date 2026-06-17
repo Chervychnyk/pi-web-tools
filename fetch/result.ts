@@ -7,7 +7,16 @@ import { appendStoredResponseNote } from '../shared.ts'
 import { setCachedValue } from '../utils/cache.ts'
 import { truncateForModel } from '../utils/truncate.ts'
 import { tryStoreWebResponse } from '../storage.ts'
-import type { ArticleData, FetchDetails, FetchOutputFormat } from './types.ts'
+import { extensionForFormat } from './content.ts'
+import type {
+  ArticleData,
+  ExtractedFetchContent,
+  FetchDetails,
+  FetchOutputFormat,
+  FetchResponseClassification,
+  ParsedFetchParams,
+} from './types.ts'
+import type { FetchResult } from './url-handler.ts'
 
 const FETCH_CACHE_TTL_MS = 10 * 60 * 1000
 const MAX_CACHED_FETCH_TEXT_CHARS = 100_000
@@ -265,4 +274,53 @@ export function buildImageFetchResult(
       tempFile: undefined,
     } satisfies FetchDetails,
   }
+}
+
+export function assembleTextFetchResult(options: {
+  classification: FetchResponseClassification
+  extracted: ExtractedFetchContent
+  bodySize: number
+  cloudflareBypassed: boolean
+  parsed: ParsedFetchParams
+  cacheKey: string
+}): FetchResult {
+  const {
+    classification,
+    extracted,
+    bodySize,
+    cloudflareBypassed,
+    parsed,
+    cacheKey,
+  } = options
+
+  return buildTextFetchResult(
+    composeFetchTextOutput(
+      classification.format,
+      extracted.content,
+      extracted.article,
+    ),
+    extensionForFormat(classification.format),
+    parsed.maxChars,
+    cacheKey,
+    parsed.url,
+    {
+      url: classification.finalUrl,
+      format: classification.format,
+      title: extracted.article?.title,
+      byline: extracted.article?.byline,
+      siteName: extracted.article?.siteName,
+      excerpt: extracted.article?.excerpt,
+      selectedSelector: extracted.article?.selectedSelector,
+      extractionMethod: extracted.article?.extractionMethod,
+      status: classification.status,
+      statusText: classification.statusText,
+      contentType: classification.contentType,
+      contentLength: classification.contentLength ?? bodySize,
+      cloudflareBypassed,
+      jinaFallbackUsed: extracted.jinaFallbackUsed,
+      pdfExtracted: extracted.pdfExtracted,
+      cached: false,
+      cacheAgeMs: 0,
+    },
+  )
 }
