@@ -1,6 +1,6 @@
 import { Readability } from '@mozilla/readability'
 import * as cheerio from 'cheerio'
-import { JSDOM } from 'jsdom'
+import { parseHTML } from 'linkedom'
 import TurndownService from 'turndown'
 import { gfm } from 'turndown-plugin-gfm'
 import { normalizeWhitespace } from '../shared.ts'
@@ -86,22 +86,22 @@ function findBestContentSelector(html: string): SelectorFragment | null {
 
 export function extractHtmlTitle(html: string) {
   try {
-    return new JSDOM(html).window.document.title?.trim() || null
+    return parseHTML(html).document.title?.trim() || null
   } catch {
     return null
   }
 }
 
 function extractReadableArticle(html: string, url: string): ArticleData {
-  const dom = new JSDOM(html, { url })
-  const article = new Readability(dom.window.document).parse()
-  const fallbackHtml = dom.window.document.body?.innerHTML || ''
-  const fallbackText = normalizeWhitespace(
-    dom.window.document.body?.textContent || '',
-  )
+  const { document } = parseHTML(html, {
+    location: { href: url },
+  })
+  const article = new Readability(document).parse()
+  const fallbackHtml = document.body?.innerHTML || ''
+  const fallbackText = normalizeWhitespace(document.body?.textContent || '')
 
   return {
-    title: article?.title?.trim() || dom.window.document.title?.trim() || null,
+    title: article?.title?.trim() || document.title?.trim() || null,
     byline: article?.byline?.trim() || null,
     excerpt: article?.excerpt?.trim() || null,
     siteName: article?.siteName?.trim() || null,

@@ -1,14 +1,29 @@
 import { formatSize } from '@mariozechner/pi-coding-agent'
 import { randomUUID } from 'node:crypto'
 import * as dns from 'node:dns/promises'
-import { createWriteStream, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  createWriteStream,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import * as http from 'node:http'
 import * as https from 'node:https'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { brotliDecompressSync, gunzipSync, inflateRawSync, inflateSync } from 'node:zlib'
-import { execFileAsync, normalizeHostname, normalizeWhitespace } from '../shared.ts'
+import {
+  brotliDecompressSync,
+  gunzipSync,
+  inflateRawSync,
+  inflateSync,
+} from 'node:zlib'
+import {
+  execFileAsync,
+  normalizeHostname,
+  normalizeWhitespace,
+} from '../shared.ts'
 import type {
   FetchProgressHandler,
   FetchRequestOptions,
@@ -18,8 +33,10 @@ import type {
 
 const DEFAULT_BROWSER_USER_AGENT =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
-const FETCH_USER_AGENT = process.env.PI_WEB_FETCH_USER_AGENT?.trim() || DEFAULT_BROWSER_USER_AGENT
-const FETCH_USER_AGENT_FALLBACK = process.env.PI_WEB_FETCH_FALLBACK_USER_AGENT?.trim() || 'pi-web-fetch/1.1'
+const FETCH_USER_AGENT =
+  process.env.PI_WEB_FETCH_USER_AGENT?.trim() || DEFAULT_BROWSER_USER_AGENT
+const FETCH_USER_AGENT_FALLBACK =
+  process.env.PI_WEB_FETCH_FALLBACK_USER_AGENT?.trim() || 'pi-web-fetch/1.1'
 const ACCEPT_ENCODING_HEADER = 'gzip, deflate, br'
 const JINA_READER_HOST = 'r.jina.ai'
 const PDF_MIME_TYPES = new Set(['application/pdf', 'application/x-pdf'])
@@ -48,7 +65,10 @@ export function isBlockedHostname(hostname: string) {
 }
 
 function normalizeIpAddress(address: string) {
-  const normalized = address.trim().toLowerCase().replace(/^\[(.*)\]$/, '$1')
+  const normalized = address
+    .trim()
+    .toLowerCase()
+    .replace(/^\[(.*)\]$/, '$1')
   const mappedIpv4 = normalized.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)
   return mappedIpv4 ? mappedIpv4[1] : normalized
 }
@@ -56,7 +76,9 @@ function normalizeIpAddress(address: string) {
 function parseIpv4Octets(address: string) {
   if (net.isIP(address) !== 4) return undefined
   const octets = address.split('.').map((part) => Number.parseInt(part, 10))
-  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+  if (
+    octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)
+  ) {
     return undefined
   }
   return octets
@@ -143,7 +165,9 @@ async function resolvePublicAddress(hostname: string) {
 
   for (const entry of all) {
     if (isPrivateIpAddress(entry.address)) {
-      throw new Error(`Blocked private network address for ${hostname}: ${entry.address}`)
+      throw new Error(
+        `Blocked private network address for ${hostname}: ${entry.address}`,
+      )
     }
   }
 
@@ -163,6 +187,61 @@ const safeLookup = (hostname: string, options: any, callback: any) => {
     .catch((error) => callback(error))
 }
 
+function pickEnvValue(...names: string[]) {
+  for (const name of names) {
+    const value = process.env[name]?.trim()
+    if (value) return value
+  }
+  return undefined
+}
+
+function hostMatchesNoProxyEntry(hostname: string, entry: string) {
+  if (!entry) return false
+  if (entry === '*') return true
+
+  const target = normalizeHostname(hostname)
+  const pattern = normalizeHostname(entry.replace(/^\./, ''))
+  if (!pattern) return false
+
+  return target === pattern || target.endsWith(`.${pattern}`)
+}
+
+function shouldBypassProxy(hostname: string) {
+  const noProxy = pickEnvValue('NO_PROXY', 'no_proxy')
+  if (!noProxy) return false
+
+  return noProxy
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .some((entry) => hostMatchesNoProxyEntry(hostname, entry))
+}
+
+function resolveConfiguredProxyUrl(url: URL, explicitProxy?: string) {
+  if (explicitProxy?.trim()) return explicitProxy.trim()
+  if (shouldBypassProxy(url.hostname)) return undefined
+
+  const chain =
+    url.protocol === 'https:'
+      ? ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+      : ['HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy']
+
+  return pickEnvValue(...chain)
+}
+
+function isLoopbackHostname(hostname: string) {
+  const normalized = normalizeHostname(hostname)
+  if (normalized === 'localhost' || normalized.endsWith('.localhost')) return true
+  if (net.isIP(normalized) === 6) {
+    const stripped = normalized.replace(/^\[(.*)\]$/, '$1')
+    return stripped === '::1' || stripped === '0:0:0:0:0:0:0:1'
+  }
+  if (net.isIP(normalized) === 4) {
+    return normalized.startsWith('127.')
+  }
+  return false
+}
+
 function resolveValidatedProxyUrl(proxyUrl: string): Promise<URL> {
   let parsedProxyUrl: URL
 
@@ -173,7 +252,7 @@ function resolveValidatedProxyUrl(proxyUrl: string): Promise<URL> {
   }
 
   if (
-    !['http:', 'https:', 'socks:', 'socks4:', 'socks5:'].includes(
+    !['http:', 'https:', 'socks:', 'socks4:', 'socks5:', 'socks5h:'].includes(
       parsedProxyUrl.protocol,
     )
   ) {
@@ -186,7 +265,15 @@ function resolveValidatedProxyUrl(proxyUrl: string): Promise<URL> {
     throw new Error(`Invalid proxy URL hostname: ${proxyUrl}`)
   }
 
-  return resolvePublicAddress(parsedProxyUrl.hostname).then(() => parsedProxyUrl)
+  // Loopback proxies are intentionally exempt from public-address validation —
+  // users routinely run local SOCKS/HTTP proxies (mitmproxy, corp VPN clients).
+  if (isLoopbackHostname(parsedProxyUrl.hostname)) {
+    return Promise.resolve(parsedProxyUrl)
+  }
+
+  return resolvePublicAddress(parsedProxyUrl.hostname).then(
+    () => parsedProxyUrl,
+  )
 }
 
 function isAttachmentDisposition(contentDisposition: string) {
@@ -211,7 +298,10 @@ function isTextLikeMimeType(mimeType: string) {
   )
 }
 
-function shouldStreamBinaryResponse(contentDisposition: string, mimeType: string) {
+function shouldStreamBinaryResponse(
+  contentDisposition: string,
+  mimeType: string,
+) {
   if (isAttachmentDisposition(contentDisposition)) return true
   if (!mimeType) return false
   if (mimeType.startsWith('image/')) return false
@@ -273,14 +363,10 @@ async function requestWithDnsGuard(
     'Accept-Encoding': ACCEPT_ENCODING_HEADER,
     ...options.headers,
   }
-  const proxyUrl = options.proxy?.trim()
+  const proxyUrl = resolveConfiguredProxyUrl(url, options.proxy)
   const parsedProxyUrl = proxyUrl
     ? await resolveValidatedProxyUrl(proxyUrl)
     : undefined
-
-  if (parsedProxyUrl) {
-    await resolvePublicAddress(url.hostname)
-  }
 
   const requestOptions: http.RequestOptions = {
     protocol: url.protocol,
@@ -312,171 +398,202 @@ async function requestWithDnsGuard(
     }
 
     const request = client.request(requestOptions, (response) => {
-        const rawContentType = response.headers['content-type']
-        const contentType = Array.isArray(rawContentType)
-          ? rawContentType[0] || ''
-          : rawContentType || ''
-        const rawContentDisposition = response.headers['content-disposition']
-        const contentDisposition = Array.isArray(rawContentDisposition)
-          ? rawContentDisposition[0] || ''
-          : rawContentDisposition || ''
-        const mimeType = contentType.split(';')[0]?.trim().toLowerCase() || ''
-        const maxBytes = getResponseByteLimit(mimeType)
-        const rawContentLength = response.headers['content-length']
-        const contentLength = parseContentLength(
-          Array.isArray(rawContentLength)
-            ? rawContentLength[0] || null
-            : rawContentLength || null,
+      const meta = readResponseMeta(response)
+
+      if (meta.contentLength !== undefined && meta.contentLength > meta.maxBytes) {
+        const error = createResponseTooLargeError(
+          url,
+          meta.contentLength,
+          meta.maxBytes,
+          meta.mimeType,
         )
+        response.destroy(error)
+        request.destroy(error)
+        rejectOnce(error)
+        return
+      }
 
-        if (contentLength !== undefined && contentLength > maxBytes) {
-          const error = createResponseTooLargeError(
-            url,
-            contentLength,
-            maxBytes,
-            mimeType,
-          )
-          response.destroy(error)
-          request.destroy(error)
-          rejectOnce(error)
-          return
-        }
+      const handlerContext: ResponseHandlerContext = {
+        url,
+        response,
+        request,
+        meta,
+        isSettled: () => settled,
+        resolveOnce,
+        rejectOnce,
+      }
 
-        const buildHeaders = () => {
-          const headers = new Headers()
-          for (const [key, value] of Object.entries(response.headers)) {
-            if (Array.isArray(value)) headers.set(key, value.join(', '))
-            else if (value !== undefined) headers.set(key, String(value))
-          }
-          return headers
-        }
-
-        const shouldStreamToFile = shouldStreamBinaryResponse(
-          contentDisposition,
-          mimeType,
-        )
-
-        let totalBytes = 0
-
-        if (shouldStreamToFile) {
-          const downloadedFilePath = resolveStreamedDownloadPath(url, mimeType)
-          const output = createWriteStream(downloadedFilePath, {
-            flags: 'wx',
-            mode: 0o600,
-          })
-
-          const cleanupPartial = () => {
-            rmSync(downloadedFilePath, { force: true })
-          }
-
-          response.on('data', (chunk) => {
-            if (settled) return
-
-            const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-            totalBytes += buffer.byteLength
-            if (totalBytes > maxBytes) {
-              const error = createResponseTooLargeError(
-                url,
-                totalBytes,
-                maxBytes,
-                mimeType,
-              )
-              response.destroy(error)
-              request.destroy(error)
-              output.destroy(error)
-              cleanupPartial()
-              rejectOnce(error)
-            }
-          })
-
-          response.on('error', (error) => {
-            cleanupPartial()
-            rejectOnce(error)
-          })
-          output.on('error', (error) => {
-            cleanupPartial()
-            rejectOnce(error)
-          })
-          output.on('finish', () => {
-            const headers = buildHeaders()
-            const status = response.statusCode ?? 0
-            resolveOnce({
-              url: url.toString(),
-              status,
-              statusText: response.statusMessage ?? '',
-              headers,
-              ok: status >= 200 && status < 300,
-              bodyBuffer: Buffer.alloc(0),
-              downloadedFilePath,
-              downloadedFileSize: totalBytes,
-            })
-          })
-
-          response.pipe(output)
-          return
-        }
-
-        const chunks: Buffer[] = []
-
-        response.on('data', (chunk) => {
-          if (settled) return
-
-          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-          totalBytes += buffer.byteLength
-          if (totalBytes > maxBytes) {
-            const error = createResponseTooLargeError(
-              url,
-              totalBytes,
-              maxBytes,
-              mimeType,
-            )
-            response.destroy(error)
-            request.destroy(error)
-            rejectOnce(error)
-            return
-          }
-
-          chunks.push(buffer)
-        })
-        response.on('error', rejectOnce)
-        response.on('end', () => {
-          const headers = buildHeaders()
-
-          try {
-            let bodyBuffer = Buffer.concat(chunks)
-            bodyBuffer = decodeContentEncoding(
-              bodyBuffer,
-              headers.get('content-encoding'),
-              {
-                url: url.toString(),
-                maxBytes,
-                mimeType,
-              },
-            )
-
-            if (headers.has('content-encoding')) {
-              headers.delete('content-encoding')
-              headers.delete('content-length')
-            }
-
-            const status = response.statusCode ?? 0
-            resolveOnce({
-              url: url.toString(),
-              status,
-              statusText: response.statusMessage ?? '',
-              headers,
-              ok: status >= 200 && status < 300,
-              bodyBuffer,
-            })
-          } catch (error) {
-            rejectOnce(error)
-          }
-        })
-      },
-    )
+      if (shouldStreamBinaryResponse(meta.contentDisposition, meta.mimeType)) {
+        handleStreamingResponse(handlerContext)
+      } else {
+        handleBufferedResponse(handlerContext)
+      }
+    })
 
     request.on('error', rejectOnce)
     request.end()
+  })
+}
+
+type ResponseMeta = {
+  mimeType: string
+  contentDisposition: string
+  contentLength: number | undefined
+  maxBytes: number
+}
+
+type ResponseHandlerContext = {
+  url: URL
+  response: http.IncomingMessage
+  request: http.ClientRequest
+  meta: ResponseMeta
+  isSettled: () => boolean
+  resolveOnce: (value: GuardedFetchResponse) => void
+  rejectOnce: (error: unknown) => void
+}
+
+function pickHeader(value: string | string[] | undefined) {
+  if (Array.isArray(value)) return value[0] || ''
+  return value || ''
+}
+
+function readResponseMeta(response: http.IncomingMessage): ResponseMeta {
+  const contentType = pickHeader(response.headers['content-type'])
+  const contentDisposition = pickHeader(response.headers['content-disposition'])
+  const mimeType = contentType.split(';')[0]?.trim().toLowerCase() || ''
+  const maxBytes = getResponseByteLimit(mimeType)
+  const contentLength = parseContentLength(
+    pickHeader(response.headers['content-length']) || null,
+  )
+  return { mimeType, contentDisposition, contentLength, maxBytes }
+}
+
+function buildResponseHeaders(response: http.IncomingMessage) {
+  const headers = new Headers()
+  for (const [key, value] of Object.entries(response.headers)) {
+    if (Array.isArray(value)) headers.set(key, value.join(', '))
+    else if (value !== undefined) headers.set(key, String(value))
+  }
+  return headers
+}
+
+function handleStreamingResponse(ctx: ResponseHandlerContext) {
+  const { url, response, request, meta } = ctx
+  const downloadedFilePath = resolveStreamedDownloadPath(url, meta.mimeType)
+  const output = createWriteStream(downloadedFilePath, {
+    flags: 'wx',
+    mode: 0o600,
+  })
+
+  const cleanupPartial = () => {
+    rmSync(downloadedFilePath, { force: true })
+  }
+
+  let totalBytes = 0
+
+  response.on('data', (chunk) => {
+    if (ctx.isSettled()) return
+
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buffer.byteLength
+    if (totalBytes > meta.maxBytes) {
+      const error = createResponseTooLargeError(
+        url,
+        totalBytes,
+        meta.maxBytes,
+        meta.mimeType,
+      )
+      response.destroy(error)
+      request.destroy(error)
+      output.destroy(error)
+      cleanupPartial()
+      ctx.rejectOnce(error)
+    }
+  })
+
+  response.on('error', (error) => {
+    cleanupPartial()
+    ctx.rejectOnce(error)
+  })
+  output.on('error', (error) => {
+    cleanupPartial()
+    ctx.rejectOnce(error)
+  })
+  output.on('finish', () => {
+    const status = response.statusCode ?? 0
+    ctx.resolveOnce({
+      url: url.toString(),
+      status,
+      statusText: response.statusMessage ?? '',
+      headers: buildResponseHeaders(response),
+      ok: status >= 200 && status < 300,
+      bodyBuffer: Buffer.alloc(0),
+      downloadedFilePath,
+      downloadedFileSize: totalBytes,
+    })
+  })
+
+  response.pipe(output)
+}
+
+function handleBufferedResponse(ctx: ResponseHandlerContext) {
+  const { url, response, request, meta } = ctx
+  const chunks: Buffer[] = []
+  let totalBytes = 0
+
+  response.on('data', (chunk) => {
+    if (ctx.isSettled()) return
+
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    totalBytes += buffer.byteLength
+    if (totalBytes > meta.maxBytes) {
+      const error = createResponseTooLargeError(
+        url,
+        totalBytes,
+        meta.maxBytes,
+        meta.mimeType,
+      )
+      response.destroy(error)
+      request.destroy(error)
+      ctx.rejectOnce(error)
+      return
+    }
+
+    chunks.push(buffer)
+  })
+  response.on('error', ctx.rejectOnce)
+  response.on('end', () => {
+    const headers = buildResponseHeaders(response)
+
+    try {
+      let bodyBuffer = Buffer.concat(chunks)
+      bodyBuffer = decodeContentEncoding(
+        bodyBuffer,
+        headers.get('content-encoding'),
+        {
+          url: url.toString(),
+          maxBytes: meta.maxBytes,
+          mimeType: meta.mimeType,
+        },
+      )
+
+      if (headers.has('content-encoding')) {
+        headers.delete('content-encoding')
+        headers.delete('content-length')
+      }
+
+      const status = response.statusCode ?? 0
+      ctx.resolveOnce({
+        url: url.toString(),
+        status,
+        statusText: response.statusMessage ?? '',
+        headers,
+        ok: status >= 200 && status < 300,
+        bodyBuffer,
+      })
+    } catch (error) {
+      ctx.rejectOnce(error)
+    }
   })
 }
 
@@ -493,14 +610,20 @@ export async function fetchWithRedirects(
 ): Promise<GuardedFetchResponse> {
   let currentUrl = new URL(initialUrl.toString())
 
-  for (let redirectCount = 0; redirectCount <= MAX_REDIRECTS; redirectCount += 1) {
+  for (
+    let redirectCount = 0;
+    redirectCount <= MAX_REDIRECTS;
+    redirectCount += 1
+  ) {
     const response = await requester(currentUrl, signal, userAgent, options)
     if (!isRedirectStatus(response.status)) return response
 
     const location = response.headers.get('location')
     if (!location) return response
     if (redirectCount === MAX_REDIRECTS) {
-      throw new Error(`Too many redirects while fetching ${initialUrl.toString()}`)
+      throw new Error(
+        `Too many redirects while fetching ${initialUrl.toString()}`,
+      )
     }
 
     currentUrl = new URL(location, currentUrl)
@@ -564,7 +687,10 @@ export function parseContentLength(contentLengthHeader: string | null) {
 }
 
 function normalizeCharsetLabel(charset: string) {
-  const normalized = charset.trim().replace(/^['"]|['"]$/g, '').toLowerCase()
+  const normalized = charset
+    .trim()
+    .replace(/^['"]|['"]$/g, '')
+    .toLowerCase()
   const compact = normalized.replace(/_/g, '-')
 
   const aliases: Record<string, string> = {
@@ -679,7 +805,10 @@ export function decodeBodyAsText(
   bodyBuffer: Buffer,
   contentTypeHeader: string | null | undefined,
 ) {
-  const charset = detectBomEncoding(bodyBuffer) || parseCharsetFromContentType(contentTypeHeader) || 'utf-8'
+  const charset =
+    detectBomEncoding(bodyBuffer) ||
+    parseCharsetFromContentType(contentTypeHeader) ||
+    'utf-8'
 
   try {
     return new TextDecoder(charset).decode(bodyBuffer)
@@ -735,7 +864,9 @@ export function shouldApplyHtmlGuard(
 }
 
 export function buildJinaReaderUrl(url: string) {
-  return new URL(`https://${JINA_READER_HOST}/http://${url.replace(/^https?:\/\//i, '')}`)
+  return new URL(
+    `https://${JINA_READER_HOST}/http://${url.replace(/^https?:\/\//i, '')}`,
+  )
 }
 
 export function isPdfMimeType(mimeType: string) {
@@ -767,7 +898,11 @@ async function extractPdfTextViaPdftotext(
 
   try {
     writeFileSync(inputPath, pdfBuffer)
-    const { stdout } = await execFileAsync('pdftotext', [inputPath, '-'], signal)
+    const { stdout } = await execFileAsync(
+      'pdftotext',
+      [inputPath, '-'],
+      signal,
+    )
     const text = stdout.replace(/\f/g, '\n').trim()
     if (!text) throw new Error('pdftotext produced no text')
     return text
@@ -792,7 +927,10 @@ async function extractPdfTextViaJs(
   }
 
   const document = await unpdfModule.getDocumentProxy(new Uint8Array(pdfBuffer))
-  const pageLimit = Math.max(1, Math.min(document.numPages, MAX_JS_PDF_EXTRACT_PAGES))
+  const pageLimit = Math.max(
+    1,
+    Math.min(document.numPages, MAX_JS_PDF_EXTRACT_PAGES),
+  )
   const pages: string[] = []
 
   for (let pageIndex = 1; pageIndex <= pageLimit; pageIndex += 1) {
@@ -801,9 +939,7 @@ async function extractPdfTextViaJs(
     const page = await document.getPage(pageIndex)
     const textContent = await page.getTextContent()
     const text = normalizeWhitespace(
-      textContent.items
-        .map((item) => item.str || '')
-        .join(' '),
+      textContent.items.map((item) => item.str || '').join(' '),
     )
 
     if (!text) continue
@@ -843,12 +979,14 @@ export async function extractPdfText(
   } catch (fallbackError) {
     if ((fallbackError as Error).name === 'AbortError') throw fallbackError
 
-    const primary = pdftotextError instanceof Error
-      ? pdftotextError.message
-      : String(pdftotextError)
-    const fallback = fallbackError instanceof Error
-      ? fallbackError.message
-      : String(fallbackError)
+    const primary =
+      pdftotextError instanceof Error
+        ? pdftotextError.message
+        : String(pdftotextError)
+    const fallback =
+      fallbackError instanceof Error
+        ? fallbackError.message
+        : String(fallbackError)
 
     throw new Error(
       `PDF extraction failed (pdftotext + JS fallback). pdftotext: ${primary}. js: ${fallback}`,
@@ -857,7 +995,9 @@ export async function extractPdfText(
 }
 
 export function shouldUseJinaFallbackForStatus(status: number) {
-  return [401, 403, 408, 409, 425, 429, 451, 500, 502, 503, 504].includes(status)
+  return [401, 403, 408, 409, 425, 429, 451, 500, 502, 503, 504].includes(
+    status,
+  )
 }
 
 export function looksLikeBlockedOrJunkContent(text: string) {
@@ -907,7 +1047,9 @@ export async function fetchViaJinaReader(
   )
 
   if (!response.ok) {
-    throw new Error(`Jina Reader fetch failed: ${response.status} ${response.statusText}`)
+    throw new Error(
+      `Jina Reader fetch failed: ${response.status} ${response.statusText}`,
+    )
   }
 
   return {

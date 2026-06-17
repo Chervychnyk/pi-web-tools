@@ -143,9 +143,9 @@ async function testProxyEndpointValidation() {
         new AbortController().signal,
         undefined,
         undefined,
-        { proxy: 'http://localhost:8080' },
+        { proxy: 'ftp://proxy.example:21' },
       ),
-    /Blocked hostname: localhost/,
+    /Unsupported proxy protocol: ftp:/,
   )
 
   await assert.rejects(
@@ -155,9 +155,9 @@ async function testProxyEndpointValidation() {
         new AbortController().signal,
         undefined,
         undefined,
-        { proxy: 'http://127.0.0.1:8080' },
+        { proxy: 'http://10.0.0.1:8080' },
       ),
-    /Blocked private network address: 127\.0\.0\.1/,
+    /Blocked private network address: 10\.0\.0\.1/,
   )
 }
 

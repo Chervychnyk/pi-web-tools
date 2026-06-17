@@ -1,3 +1,4 @@
+import { readWebToolsConfig } from '../config.ts'
 import { DEFAULT_TIMEOUT, buildCacheKey } from '../shared.ts'
 import type {
   FetchOutputFormat,
@@ -47,7 +48,7 @@ function parseProxy(proxy: unknown): string | undefined {
   }
 
   if (
-    !['http:', 'https:', 'socks:', 'socks4:', 'socks5:'].includes(
+    !['http:', 'https:', 'socks:', 'socks4:', 'socks5:', 'socks5h:'].includes(
       parsedProxy.protocol,
     )
   ) {
@@ -76,7 +77,8 @@ export function parseFetchParams(params: {
   const maxChars = params.maxChars
   const refresh = params.refresh ?? false
   const headers = parseHeaders(params.headers)
-  const proxy = parseProxy(params.proxy)
+  const config = readWebToolsConfig()
+  const proxy = parseProxy(params.proxy ?? config.proxy)
 
   if (!url) throw new Error('URL cannot be empty')
   if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
