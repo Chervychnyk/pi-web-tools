@@ -10,6 +10,7 @@ import path from 'node:path'
 import {
   DEFAULT_WEB_TOOLS_CACHE_DIR,
   FALLBACK_WEB_TOOLS_CACHE_DIR,
+  getCacheDirCandidates,
   resolveWritableCacheDir,
 } from '../utils/writable-dir.ts'
 import { cloneGitHubRepo } from './git.ts'
@@ -50,13 +51,47 @@ function getXdgGitHubCacheDir(env: NodeJS.ProcessEnv = process.env) {
   return path.join(path.resolve(env.XDG_CACHE_HOME), 'pi', 'web-tools', 'github')
 }
 
+function canUseGitHubCacheDir(dir: string) {
+  const probePath = path.join(
+    dir,
+    `.pi-web-tools-git-probe-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`,
+  )
+
+  try {
+    mkdirSync(path.join(probePath, '.git'), { recursive: true })
+    writeFileSync(path.join(probePath, '.git', 'config'), 'ok\n', 'utf8')
+    rmSync(probePath, { recursive: true, force: true })
+    return true
+  } catch {
+    rmSync(probePath, { recursive: true, force: true })
+    return false
+  }
+}
+
 function resolveGitHubCacheDir(env: NodeJS.ProcessEnv = process.env) {
-  return resolveWritableCacheDir({
+  const options = {
     explicitDir: getExplicitGitHubCacheDir(env),
     defaultDir: DEFAULT_GITHUB_CACHE_DIR,
     xdgDir: getXdgGitHubCacheDir(env),
     fallbackDir: FALLBACK_GITHUB_CACHE_DIR,
-  })
+  }
+
+  // The general web-tools cache probe only checks ordinary files. Under Pi's
+  // sandbox, ~/.pi may be symlinked into the active dotfiles repo, where writes
+  // below .git directories are blocked. GitHub cache entries are real clones, so
+  // verify that the chosen cache can host a .git/config before cloning.
+  const candidates = getCacheDirCandidates(options)
+  for (const dir of candidates) {
+    if (canUseGitHubCacheDir(dir)) {
+      return {
+        dir,
+        fallbackUsed: dir !== path.resolve(options.defaultDir),
+        attempted: candidates,
+      }
+    }
+  }
+
+  return resolveWritableCacheDir(options)
 }
 
 function repoCachePath(info: GitHubUrlInfo, cacheDir: string) {

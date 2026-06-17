@@ -1,8 +1,17 @@
+import { mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { execFileAsync } from '../shared.ts'
 import type { GitHubUrlInfo } from './types.ts'
 import { resolveGitHubRefPath } from './url.ts'
 
 let ghCliAvailable: boolean | undefined
+
+export function getEmptyGitTemplateDir() {
+  const templateDir = path.join(tmpdir(), 'pi-web-tools-empty-git-template')
+  mkdirSync(templateDir, { recursive: true })
+  return templateDir
+}
 
 async function hasGhCli(signal?: AbortSignal) {
   if (ghCliAvailable !== undefined) return ghCliAvailable
@@ -57,7 +66,7 @@ export async function cloneGitHubRepo(
     try {
       const ghArgs = ['repo', 'clone', `${info.owner}/${info.repo}`, localPath, '--']
       if (info.ref) ghArgs.push('--branch', info.ref)
-      ghArgs.push('--depth', '1', '--single-branch')
+      ghArgs.push('--depth', '1', '--single-branch', '--template', getEmptyGitTemplateDir())
       await execFileAsync('gh', ghArgs, signal)
       return
     } catch {
@@ -65,7 +74,14 @@ export async function cloneGitHubRepo(
     }
   }
 
-  const gitArgs = ['clone', '--depth', '1', '--single-branch']
+  const gitArgs = [
+    'clone',
+    '--depth',
+    '1',
+    '--single-branch',
+    '--template',
+    getEmptyGitTemplateDir(),
+  ]
   if (info.ref) gitArgs.push('--branch', info.ref)
   gitArgs.push(`https://github.com/${info.owner}/${info.repo}.git`, localPath)
 
