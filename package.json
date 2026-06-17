@@ -29,6 +29,6 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "node tests.ts"
+    "test": "node --test --test-reporter=spec --import=./tests/setup.ts 'tests/*.test.ts'"
   }
 }

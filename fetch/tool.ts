@@ -261,20 +261,26 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       // Dispatch: first matching handler whose validate passes runs.
       // Returning null from fetch falls through to the next matching handler.
       // The HTTP handler always matches and never returns null, so dispatch
-      // is total. depth>1 catches re-dispatch loops; same-handler short-circuits.
+      // is total. depth>1 catches re-dispatch loops; ctx.dispatch excludes
+      // the calling handler so "is there a more specific handler?" can't
+      // route back to the asker.
       const runHandler = async (
         url: URL,
         depth: number,
         strict: boolean,
+        excludeHandler?: UrlHandler,
       ): Promise<FetchResult | null> => {
         if (depth > 1) throw new Error('UrlHandler dispatch loop')
         for (const handler of handlers) {
+          if (handler === excludeHandler) continue
           if (!handler.match(url)) continue
           try {
             handler.validate(parsed)
           } catch (error) {
             if (strict) throw error
-            continue
+            // Soft validate: the matched handler refuses this request. Give
+            // up — the caller (HTTP) will continue with what it already has.
+            return null
           }
           const result = await handler.fetch({
             url,
@@ -282,11 +288,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
             signal: controller.signal,
             onUpdate,
             cacheKey,
-            dispatch: async (next) => {
-              const target = handlers.find((h) => h.match(next))
-              if (target === handler) return null
-              return runHandler(next, depth + 1, false)
-            },
+            dispatch: (next) => runHandler(next, depth + 1, false, handler),
           })
           if (result !== null) return result
         }

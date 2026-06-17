@@ -62,3 +62,10 @@ export function setCachedValue<T>(key: string, value: T, ttlMs: number, now = Da
     expiresAt: now + ttlMs,
   })
 }
+
+// Test-only escape hatch — clears the in-memory cache so test isolation isn't
+// hostage to module-load ordering. Safe to call from production code if you
+// genuinely want a cache reset; it's just narrowly useful outside of tests.
+export function clearToolCache() {
+  TOOL_CACHE.clear()
+}

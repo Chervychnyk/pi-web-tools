@@ -9,6 +9,11 @@ export type {
   GuardedRequester,
 } from './fetch/types.ts'
 export type { WebFetchDependencies } from './fetch/tool.ts'
+export type {
+  FetchResult,
+  HandlerContext,
+  UrlHandler,
+} from './fetch/url-handler.ts'
 export {
   buildJinaReaderUrl,
   decodeBodyAsText,
@@ -22,6 +27,7 @@ export {
   isPdfUrl,
   isPrivateIpAddress,
   looksLikeBlockedOrJunkContent,
+  MAX_HTML_BYTES,
   MAX_IMAGE_RESPONSE_BYTES,
   MAX_JSON_RESPONSE_BYTES,
   MAX_OTHER_RESPONSE_BYTES,
