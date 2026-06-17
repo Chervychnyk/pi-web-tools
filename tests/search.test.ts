@@ -18,7 +18,8 @@ import {
 import { SEARCH_PROVIDER_NAMES } from '../providers/types.ts'
 import { getStoredWebResponse } from '../storage.ts'
 import { clearToolCache } from '../utils/cache.ts'
-import { createWebSearchTool, type SearchDetails } from '../web-search.ts'
+import { createWebSearchTool } from '../web-search.ts'
+import { getTextContent } from './helpers.ts'
 
 describe('providers/shared', () => {
   it('exposes the full list of provider names', () => {
@@ -233,15 +234,13 @@ describe('createWebSearchTool', () => {
       undefined,
       undefined,
     )
-    const fallbackDetails = fallbackResult.details as SearchDetails
-    const fallbackText = fallbackResult.content[0] as { type: 'text'; text: string }
 
     assert.equal(primaryCalls, 1)
     assert.equal(fallbackCalls, 1)
-    assert.equal(fallbackDetails.provider, 'brave')
-    assert.equal(fallbackDetails.fallbackUsed, true)
-    assert.ok(fallbackDetails.responseId)
-    assert.match(fallbackText.text, /responseId:/)
+    assert.equal(fallbackResult.details.provider, 'brave')
+    assert.equal(fallbackResult.details.fallbackUsed, true)
+    assert.ok(fallbackResult.details.responseId)
+    assert.match(getTextContent(fallbackResult.content), /responseId:/)
   })
 
   it('returns cached results on the second call with the same query', async () => {
@@ -267,11 +266,10 @@ describe('createWebSearchTool', () => {
       undefined,
       undefined,
     )
-    const details = cached.details as SearchDetails
 
     assert.equal(cacheCalls, 1)
-    assert.equal(details.cached, true)
-    assert.equal(details.count, 1)
+    assert.equal(cached.details.cached, true)
+    assert.equal(cached.details.count, 1)
   })
 
   it('memoises provider selection across queries in a single batch', async () => {
@@ -308,10 +306,9 @@ describe('createWebSearchTool', () => {
       undefined,
       undefined,
     )
-    const details = result.details as SearchDetails
     assert.equal(primaryCalls, 1, 'primary tried once, then memoised as broken')
     assert.equal(fallbackCalls, 3, 'fallback runs for all three queries')
-    assert.equal(details.count, 3)
+    assert.equal(result.details.count, 3)
   })
 
   it('truncates preview text but stores the full result set', async () => {
@@ -335,13 +332,14 @@ describe('createWebSearchTool', () => {
       undefined,
       undefined,
     )
-    const details = result.details as SearchDetails
-    const content = result.content[0] as { type: 'text'; text: string }
-    const stored = details.responseId ? getStoredWebResponse(details.responseId) : undefined
+    const text = getTextContent(result.content)
+    const stored = result.details.responseId
+      ? getStoredWebResponse(result.details.responseId)
+      : undefined
 
-    assert.match(content.text, /alpha result 1/)
-    assert.doesNotMatch(content.text, /alpha result 5/)
-    assert.match(content.text, /2 more results/)
+    assert.match(text, /alpha result 1/)
+    assert.doesNotMatch(text, /alpha result 5/)
+    assert.match(text, /2 more results/)
     assert.equal(stored?.kind, 'search')
     assert.equal(stored?.queryResults[0]?.results.length, 5)
     assert.equal('messageText' in (stored?.queryResults[0] || {}), false)

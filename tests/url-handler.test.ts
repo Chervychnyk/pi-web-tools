@@ -7,7 +7,7 @@ import {
   type FetchResult,
   type UrlHandler,
 } from '../web-fetch.ts'
-import { createResponse } from './helpers.ts'
+import { createResponse, getTextContent } from './helpers.ts'
 
 function staticTextResult(url: string, text: string): FetchResult {
   return {
@@ -51,7 +51,7 @@ describe('UrlHandler dispatch', () => {
     )
     assert.equal(fetchedBy, 'match')
     assert.equal(
-      (result.content[0] as { text: string }).text,
+      getTextContent(result.content),
       'matched body',
     )
   })
@@ -162,7 +162,7 @@ describe('UrlHandler dispatch', () => {
     assert.equal(strictValidates, 1, 'strict validate fired post-redirect')
     assert.equal(httpCalls, 1, 'HTTP fetched exactly once — no duplicate fetch')
     assert.match(
-      (result.content[0] as { text: string }).text,
+      getTextContent(result.content),
       /http body content/,
       'HTTP continued with its body when dispatch returned null',
     )
@@ -257,7 +257,7 @@ describe('UrlHandler dispatch', () => {
     assert.equal(selfCalls, 1, 'self handler invoked exactly once (no re-entry)')
     assert.equal(httpCalls, 1, 'dispatch routed to HTTP catch-all instead')
     assert.match(
-      (result.content[0] as { text: string }).text,
+      getTextContent(result.content),
       /http picked up/,
     )
   })
@@ -295,6 +295,6 @@ describe('UrlHandler dispatch', () => {
       undefined,
     )
     assert.equal(httpCalls, 1)
-    assert.match((result.content[0] as { text: string }).text, /http reached/)
+    assert.match(getTextContent(result.content), /http reached/)
   })
 })

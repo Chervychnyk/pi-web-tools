@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, it } from 'node:test'
-import { createGetWebContentTool, type GetWebContentDetails } from '../get-web-content.ts'
+import { createGetWebContentTool } from '../get-web-content.ts'
 import { createListWebContentTool } from '../list-web-content.ts'
+import { getTextContent } from './helpers.ts'
 import {
   getStoredWebResponse,
   listStoredWebResponses,
@@ -200,7 +201,7 @@ describe('get_web_content tool', () => {
       undefined,
       undefined,
     )
-    const text = (result.content[0] as { type: 'text'; text: string }).text
+    const text = getTextContent(result.content)
     assert.match(text, /Source URL: https:\/\/example\.com\/docs/)
     assert.match(text, /Requested URL: https:\/\/example\.com\/old-docs/)
     assert.match(text, /Title: Example Docs/)
@@ -244,7 +245,7 @@ describe('get_web_content tool', () => {
       undefined,
       undefined,
     )
-    const text = (result.content[0] as { type: 'text'; text: string }).text
+    const text = getTextContent(result.content)
     assert.match(text, /Result count: 1/)
     assert.match(text, /Query index: 1/)
     assert.match(text, /queryIndex: 1/)
@@ -277,8 +278,8 @@ describe('get_web_content tool', () => {
       undefined,
       undefined,
     )
-    const details = result.details as GetWebContentDetails
-    const text = (result.content[0] as { type: 'text'; text: string }).text
+    const { details } = result
+    const text = getTextContent(result.content)
 
     assert.equal(details.selectedQuery, 'alpha')
     assert.equal(details.returnedLines, 1)
@@ -320,7 +321,7 @@ describe('get_web_content tool', () => {
       undefined,
       undefined,
     )
-    const text = (result.content[0] as { type: 'text'; text: string }).text
+    const text = getTextContent(result.content)
     assert.match(text, /Legacy Result/)
     assert.match(text, /https:\/\/legacy.test/)
   })
@@ -343,8 +344,8 @@ describe('list_web_content tool', () => {
       undefined,
       undefined,
     )
-    const text = (result.content[0] as { type: 'text'; text: string }).text
-    const details = result.details as { items: Array<Record<string, unknown>> }
+    const text = getTextContent(result.content)
+    const { details } = result
 
     assert.match(text, /Stored web content:/)
     assert.match(text, /Retrieve: get_web_content/)

@@ -6,7 +6,7 @@ import path from 'node:path'
 import { gzipSync } from 'node:zlib'
 import { beforeEach, describe, it } from 'node:test'
 import { clearToolCache } from '../utils/cache.ts'
-import { buildFetchTool, createResponse } from './helpers.ts'
+import { buildFetchTool, createResponse, getTextContent } from './helpers.ts'
 
 describe('createWebFetchTool — execute()', () => {
   beforeEach(() => clearToolCache())
@@ -92,7 +92,7 @@ describe('createWebFetchTool — execute()', () => {
       undefined,
     )
     assert.equal(networkCalls, 0)
-    assert.equal((result.details as { githubType?: string }).githubType, 'root')
+    assert.equal(result.details.githubType, 'root')
   })
 
   it('redispatches to the GitHub handler after an HTTP redirect lands on github.com', async () => {
@@ -128,9 +128,8 @@ describe('createWebFetchTool — execute()', () => {
       undefined,
     )
     assert.equal(redirectedGithubCalls, 1)
-    const details = result.details as { githubType?: string; githubSource?: string }
-    assert.equal(details.githubType, 'root')
-    assert.equal(details.githubSource, 'api')
+    assert.equal(result.details.githubType, 'root')
+    assert.equal(result.details.githubSource, 'api')
   })
 
   it('extracts PDF text when the response is application/pdf', async () => {
@@ -158,8 +157,8 @@ describe('createWebFetchTool — execute()', () => {
       undefined,
     )
     assert.equal(pdfCalls, 1)
-    assert.equal((result.details as { pdfExtracted?: boolean }).pdfExtracted, true)
-    assert.match((result.content[0] as { text: string }).text, /PDF body text/)
+    assert.equal(result.details.pdfExtracted, true)
+    assert.match(getTextContent(result.content), /PDF body text/)
   })
 
   it('propagates custom headers and proxy through to networkFetcher', async () => {
@@ -227,7 +226,7 @@ describe('createWebFetchTool — execute()', () => {
       undefined,
       undefined,
     )
-    assert.match((result.content[0] as { text: string }).text, /café/)
+    assert.match(getTextContent(result.content), /café/)
   })
 
   it('rejects selector + non-HTML response with a helpful error', async () => {
@@ -335,12 +334,7 @@ describe('createWebFetchTool — execute()', () => {
       undefined,
       undefined,
     )
-    const details = result.details as {
-      isFile?: boolean
-      filePath?: string
-      fileName?: string
-      fileSize?: number
-    }
+    const { details } = result
     assert.equal(details.isFile, true)
     assert.equal(details.fileName, 'archive.bin')
     assert.equal(details.fileSize, 5)
@@ -377,8 +371,7 @@ describe('createWebFetchTool — execute()', () => {
         undefined,
         undefined,
       )
-      const details = result.details as { filePath?: string }
-      assert.equal(details.filePath, existingFilePath)
+      assert.equal(result.details.filePath, existingFilePath)
     } finally {
       rmSync(tempDir, { recursive: true, force: true })
     }

@@ -44,21 +44,7 @@ describe('createBatchWebFetchTool', () => {
       undefined,
     )
 
-    const details = result.details as {
-      total: number
-      succeeded: number
-      failed: number
-      completed: number
-      concurrency: number
-      items: Array<{
-        index: number
-        url: string
-        status: string
-        errorCode?: string
-        errorPhase?: string
-        retryable?: boolean
-      }>
-    }
+    const { details } = result
 
     assert.equal(details.total, 3)
     assert.equal(details.completed, 3)

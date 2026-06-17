@@ -61,3 +61,16 @@ export function buildBatchFetchTool(overrides: NonNullable<CreateWebFetchToolDep
     ...overrides,
   })
 }
+
+// Narrows the union (TextContent | ImageContent)[] down to the text payload.
+// Throws if no text block exists — tests want a definite string, not an
+// undefined-walk through optional chaining.
+export function getTextContent(
+  content: ReadonlyArray<{ type: string; text?: string }>,
+): string {
+  const block = content.find((c) => c.type === 'text')
+  if (!block || typeof block.text !== 'string') {
+    throw new Error('Expected a text content block in tool result')
+  }
+  return block.text
+}
