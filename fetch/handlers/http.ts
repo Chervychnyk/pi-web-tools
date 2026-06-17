@@ -90,11 +90,7 @@ export function createDefaultHttpHandler(
       let downloadedFilePathForCleanup: string | undefined
 
       try {
-        emitFetchProgress(
-          onUpdate,
-          'network',
-          `Requesting ${url.hostname}...`,
-        )
+        emitFetchProgress(onUpdate, 'network', `GET ${url.hostname}`)
 
         const { response, cloudflareBypassed } = await networkFetcher(
           url,
@@ -111,7 +107,7 @@ export function createDefaultHttpHandler(
         emitFetchProgress(
           onUpdate,
           'response',
-          `Received ${response.status} ${response.statusText || ''}`.trim(),
+          `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         )
 
         if (!response.ok) {
@@ -231,7 +227,7 @@ export function createDefaultHttpHandler(
           emitFetchProgress(
             onUpdate,
             'download',
-            `Downloaded ${formatSize(streamedSize)} from ${new URL(classification.finalUrl).hostname}`,
+            `${formatSize(streamedSize)} streamed to file`,
           )
 
           const fileResult = buildFileFetchResult({
@@ -270,11 +266,7 @@ export function createDefaultHttpHandler(
         )
         const bodySize = bodyBuffer.byteLength
 
-        emitFetchProgress(
-          onUpdate,
-          'download',
-          `Downloaded ${formatSize(bodySize)} from ${new URL(classification.finalUrl).hostname}`,
-        )
+        emitFetchProgress(onUpdate, 'download', formatSize(bodySize))
 
         if (
           classification.isHtml &&

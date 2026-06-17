@@ -49,6 +49,33 @@ export function renderToolCallHeader(
 ) {
   let text = theme.fg('toolTitle', theme.bold(`${toolName} `))
   text += theme.fg('accent', truncateText(primaryText, primaryMaxLength))
-  if (parts.length) text += theme.fg('dim', ` (${parts.join(', ')})`)
+  if (parts.length) text += theme.fg('dim', ` (${parts.join(' · ')})`)
   return new Text(text, 0, 0)
+}
+
+// Strip the protocol from a URL for display; preserves everything else.
+// Used in tool-call headers where the host is the most informative part
+// and `https://` is constant noise.
+export function compactUrl(url: string): string {
+  if (!url) return url
+  return url.replace(/^https?:\/\//i, '').replace(/\/$/, '')
+}
+
+// Render a millisecond duration in human units.
+//   600   -> '600ms'
+//   1500  -> '1.5s'
+//   10000 -> '10s'
+//   90000 -> '1.5m'
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return `${ms}ms`
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) {
+    const seconds = ms / 1000
+    return seconds % 1 === 0 ? `${seconds}s` : `${seconds.toFixed(1)}s`
+  }
+  if (ms < 3_600_000) {
+    const minutes = ms / 60_000
+    return minutes % 1 === 0 ? `${minutes}m` : `${minutes.toFixed(1)}m`
+  }
+  return `${(ms / 3_600_000).toFixed(1)}h`
 }

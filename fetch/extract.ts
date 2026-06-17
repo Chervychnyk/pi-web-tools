@@ -55,7 +55,7 @@ export async function extractFetchContent(
   let jinaFallbackUsed = false
   let pdfExtracted = false
 
-  emitFetchProgress(onUpdate, 'process', `Processing ${format} output...`)
+  emitFetchProgress(onUpdate, 'process', format)
 
   if (format === 'json') {
     try {
@@ -80,7 +80,7 @@ export async function extractFetchContent(
     }
   } else if (format === 'text' || format === 'markdown') {
     if (classification.isPdf) {
-      emitFetchProgress(onUpdate, 'extract', 'Extracting text from PDF...')
+      emitFetchProgress(onUpdate, 'extract', 'pdf text')
       content = normalizeWhitespace(
         await pdfTextExtractor(bodyBuffer, signal),
       )
@@ -90,15 +90,15 @@ export async function extractFetchContent(
         onUpdate,
         'extract',
         selector
-          ? `Selecting ${selector}...`
+          ? `selector ${selector}`
           : format === 'markdown'
-            ? 'Extracting readable article...'
-            : 'Extracting main text...',
+            ? 'readability'
+            : 'main text',
       )
       article = extractBestHtmlContent(raw, classification.finalUrl, selector)
 
       if (format === 'markdown') {
-        emitFetchProgress(onUpdate, 'convert', 'Converting HTML to markdown...')
+        emitFetchProgress(onUpdate, 'convert', 'html → markdown')
         content = cleanupMarkdown(
           getTurndownService().turndown(article.contentHtml),
         )

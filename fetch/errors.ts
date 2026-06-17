@@ -54,7 +54,10 @@ export function buildWebFetchErrorMessage(error: WebFetchError) {
   }
 
   const hint = getWebFetchErrorHint(error)
-  return [error.message, hint, parts.join(' ')].filter(Boolean).join('\n')
+  const human = [error.message, hint].filter(Boolean).join('\n')
+  // Blank line before the structured tail so the message reads as the
+  // user-facing failure with metadata visually demoted underneath.
+  return `${human}\n\n${parts.join(' ')}`
 }
 
 export function createWebFetchError(

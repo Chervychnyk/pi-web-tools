@@ -8,7 +8,7 @@ import { appendStoredResponseNote } from './shared.ts'
 import { DEFAULT_TIMEOUT, createAbortController } from './utils/abort.ts'
 import { buildCacheKey, getCachedValue, setCachedValue } from './utils/cache.ts'
 import { truncateForModel, truncateText } from './utils/truncate.ts'
-import { renderBadges, renderToolCallHeader } from './utils/ui.ts'
+import { formatDuration, renderBadges, renderToolCallHeader } from './utils/ui.ts'
 import {
   MAX_SEARCH_LIMIT,
   SEARCH_PROVIDER_NAMES,
@@ -516,8 +516,8 @@ export function createWebSearchTool(
       if (args.provider) parts.push(`provider=${args.provider}`)
       if (args.limit) parts.push(`limit=${args.limit}`)
       if (args.maxChars) parts.push(`maxChars=${args.maxChars}`)
-      if (args.timeout) parts.push(`timeout=${args.timeout}ms`)
-      if (args.refresh) parts.push('refresh=true')
+      if (args.timeout) parts.push(`timeout=${formatDuration(args.timeout)}`)
+      if (args.refresh) parts.push('refresh')
       if (queries.length > 1) parts.push(`queries=${queries.length}`)
       return renderToolCallHeader('web_search', displayQuery, 72, parts, theme)
     },

@@ -7,7 +7,12 @@ import type { fetchGitHubContent } from '../github.ts'
 import { DEFAULT_TIMEOUT, createAbortController } from '../utils/abort.ts'
 import { getCachedValue } from '../utils/cache.ts'
 import { truncateText } from '../utils/truncate.ts'
-import { renderBadges, renderToolCallHeader } from '../utils/ui.ts'
+import {
+  compactUrl,
+  formatDuration,
+  renderBadges,
+  renderToolCallHeader,
+} from '../utils/ui.ts'
 import {
   buildWebFetchErrorMessage,
   mapUnknownError,
@@ -75,10 +80,25 @@ function statusGlyph(status: BatchFetchItemSummary['status']) {
   return '·'
 }
 
+type BatchRowTheme = {
+  fg(color: string, value: string): string
+  bold(value: string): string
+}
+
+const BATCH_STATUS_COLORS: Record<BatchFetchItemSummary['status'], string> = {
+  done: 'success',
+  error: 'warning',
+  running: 'accent',
+  queued: 'dim',
+}
+
+const BATCH_BAR_MIN_WIDTH = 60
+
 function renderBatchRows(
   details: BatchFetchDetails,
   width: number,
   expanded: boolean,
+  theme: BatchRowTheme,
 ) {
   const maxRows = expanded ? details.items.length : 8
   const selected = details.items.slice(0, maxRows)
@@ -86,27 +106,43 @@ function renderBatchRows(
 
   const available = Math.max(30, width)
   const prefixWidth = 4
-  const barWidth = Math.min(14, Math.max(8, Math.floor(available * 0.18)))
+  const showBar = available >= BATCH_BAR_MIN_WIDTH
+  const barWidth = showBar
+    ? Math.min(14, Math.max(8, Math.floor(available * 0.18)))
+    : 0
   const statusWidth = 7
   const urlWidth = Math.max(
     12,
-    available - prefixWidth - barWidth - statusWidth - 4,
+    available - prefixWidth - barWidth - statusWidth - (showBar ? 4 : 3),
   )
 
   for (const item of selected) {
-    const status = item.status.padEnd(statusWidth, ' ')
-    const url = truncateMiddle(item.url, urlWidth)
-    const progress = item.progress ?? statusToProgress(item.status)
-    const bar = buildProgressBar(progress, barWidth)
-    rows.push(`${statusGlyph(item.status)} ${url} ${status} ${bar}`)
+    const color = BATCH_STATUS_COLORS[item.status] ?? 'muted'
+    const glyph = theme.fg(color, statusGlyph(item.status))
+    const status = theme.fg(color, item.status.padEnd(statusWidth, ' '))
+    const url = theme.fg(
+      item.status === 'error' ? 'warning' : 'muted',
+      truncateMiddle(item.url, urlWidth),
+    )
+    let row = `${glyph} ${url} ${status}`
+    if (showBar) {
+      const progress = item.progress ?? statusToProgress(item.status)
+      row += ` ${theme.fg('dim', buildProgressBar(progress, barWidth))}`
+    }
+    rows.push(row)
 
     if (expanded && item.status === 'error' && item.error) {
-      rows.push(`  ↳ ${item.error}`)
+      rows.push(`  ${theme.fg('warning', '↳')} ${theme.fg('muted', item.error)}`)
     }
   }
 
   if (!expanded && details.items.length > maxRows) {
-    rows.push(`… ${details.items.length - maxRows} more items (expand to view all)`)
+    rows.push(
+      theme.fg(
+        'dim',
+        `… ${details.items.length - maxRows} more items (expand to view all)`,
+      ),
+    )
   }
 
   return rows
@@ -203,11 +239,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
           details: FetchDetails
         }>(cacheKey)
         if (cached) {
-          emitFetchProgress(
-            onUpdate,
-            'cache',
-            `Using cached fetch result for ${parsed.url}`,
-          )
+          emitFetchProgress(onUpdate, 'cache', 'hit')
           return {
             content: cached.value.content,
             details: {
@@ -219,11 +251,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
         }
       }
 
-      emitFetchProgress(
-        onUpdate,
-        'resolve',
-        `Validating and fetching ${parsed.url}...`,
-      )
+      emitFetchProgress(onUpdate, 'resolve', 'validating')
 
       const { controller, cleanup, rethrowIfAbort } = createAbortController(
         parsed.timeoutMs,
@@ -288,14 +316,24 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       if (args.format) parts.push(`format=${args.format}`)
       if (args.selector) parts.push(`selector=${args.selector}`)
       if (args.maxChars) parts.push(`maxChars=${args.maxChars}`)
-      if (args.timeout) parts.push(`timeout=${args.timeout}ms`)
+      if (args.timeout) parts.push(`timeout=${formatDuration(args.timeout)}`)
       if (args.headers) parts.push('headers')
       if (args.proxy) parts.push('proxy')
-      if (args.refresh) parts.push('refresh=true')
-      return renderToolCallHeader('web_fetch', args.url, 84, parts, theme)
+      if (args.refresh) parts.push('refresh')
+      return renderToolCallHeader('web_fetch', compactUrl(args.url), 84, parts, theme)
     },
     renderResult(result, { expanded, isPartial }, theme) {
-      if (isPartial) return new Text(theme.fg('warning', 'Fetching...'), 0, 0)
+      if (isPartial) {
+        const latest = Array.isArray(result.content)
+          ? result.content.find((c) => c.type === 'text')?.text
+          : undefined
+        const message = latest || 'fetching'
+        return new Text(
+          `${theme.fg('dim', '⋯ ')}${theme.fg('muted', message)}`,
+          0,
+          0,
+        )
+      }
 
       const details = (result.details || {}) as FetchDetails
       const sep = theme.fg('dim', ' · ')
@@ -344,60 +382,74 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       })
 
       if (expanded) {
-        if (details.responseId) {
-          text += `\n${theme.fg('muted', `Stored responseId: ${details.responseId}`)}`
-        }
-        text += `\n${theme.fg('dim', `URL: ${details.url || 'unknown'}`)}`
-        if (details.cached && details.cacheAgeMs !== undefined) {
-          text += `\n${theme.fg('dim', `Cache age: ${details.cacheAgeMs}ms`)}`
-        }
-        if (details.status) {
-          text += `\n${theme.fg('dim', `HTTP: ${details.status} ${details.statusText || ''}`.trim())}`
-        }
-        if (details.contentType) {
-          text += `\n${theme.fg('dim', `Content-Type: ${details.contentType}`)}`
-        }
-        if (details.jinaFallbackUsed) {
-          text += `\n${theme.fg('muted', 'Fallback: Jina Reader')}`
-        }
-        if (details.pdfExtracted) {
-          text += `\n${theme.fg('muted', 'PDF: text extracted')}`
-        }
-        if (details.contentLength !== undefined) {
-          text += `\n${theme.fg('dim', `Content-Length: ${formatSize(details.contentLength)}`)}`
-        }
+        // Identity: who/where
+        const identity: string[] = []
         if (details.title) {
-          text += `\n${theme.fg('accent', `Title: ${details.title}`)}`
+          identity.push(theme.fg('accent', details.title))
         }
-        if (details.githubType) {
-          const githubLabel = details.githubSource
-            ? `${details.githubType} (${details.githubSource})`
-            : details.githubType
-          text += `\n${theme.fg('muted', `GitHub: ${githubLabel}`)}`
-        }
-        if (details.githubLocalPath) {
-          text += `\n${theme.fg('muted', `Local path: ${details.githubLocalPath}`)}`
+        if (details.url) {
+          identity.push(`  ${theme.fg('dim', compactUrl(details.url))}`)
         }
         if (details.byline) {
-          text += `\n${theme.fg('muted', `Byline: ${details.byline}`)}`
+          identity.push(`  ${theme.fg('muted', `by ${details.byline}`)}`)
         }
         if (details.siteName) {
-          text += `\n${theme.fg('muted', `Site: ${details.siteName}`)}`
+          identity.push(`  ${theme.fg('muted', details.siteName)}`)
         }
-        if (details.extractionMethod) {
-          text += `\n${theme.fg('muted', `Extraction: ${details.extractionMethod}`)}`
+        if (identity.length) text += `\n${identity.join('\n')}`
+
+        // Response shape: HTTP + type + size + extraction
+        const responseLine: string[] = []
+        if (details.status) {
+          responseLine.push(
+            `${details.status}${details.statusText ? ` ${details.statusText}` : ''}`,
+          )
         }
+        if (details.contentType) responseLine.push(details.contentType)
+        if (details.contentLength !== undefined) {
+          responseLine.push(formatSize(details.contentLength))
+        }
+        if (details.extractionMethod) responseLine.push(details.extractionMethod)
+        if (responseLine.length) {
+          text += `\n${theme.fg('dim', responseLine.join(' · '))}`
+        }
+
+        if (details.githubType) {
+          const ghLabel = details.githubSource
+            ? `${details.githubType} via ${details.githubSource}`
+            : details.githubType
+          text += `\n${theme.fg('muted', `github: ${ghLabel}`)}`
+          if (details.githubLocalPath) {
+            text += ` ${theme.fg('dim', `(${details.githubLocalPath})`)}`
+          }
+        }
+
+        if (details.responseId) {
+          text += `\n${theme.fg('muted', `stored: ${details.responseId}`)} `
+          text += theme.fg('dim', '· retrieve with get_web_content')
+        }
+        if (details.cached && details.cacheAgeMs !== undefined) {
+          text += `\n${theme.fg('dim', `cached ${formatDuration(details.cacheAgeMs)} ago`)}`
+        }
+
+        // Diagnostics: only when non-trivial
+        const diagnostics: string[] = []
+        if (details.jinaFallbackUsed) diagnostics.push('Jina Reader fallback')
+        if (details.cloudflareBypassed) diagnostics.push('Cloudflare retry')
+        if (details.pdfExtracted) diagnostics.push('PDF text extracted')
+        if (diagnostics.length) {
+          text += `\n${theme.fg('muted', diagnostics.join(' · '))}`
+        }
+
+        // File payload
         if (details.filePath) {
-          text += `\n${theme.fg('muted', `Downloaded file: ${details.filePath}`)}`
-        }
-        if (details.fileName) {
-          text += `\n${theme.fg('muted', `File name: ${details.fileName}`)}`
-        }
-        if (details.fileSize !== undefined) {
-          text += `\n${theme.fg('muted', `File size: ${formatSize(details.fileSize)}`)}`
+          text += `\n${theme.fg('muted', `file: ${details.filePath}`)}`
+          if (details.fileSize !== undefined) {
+            text += ` ${theme.fg('dim', `(${formatSize(details.fileSize)})`)}`
+          }
         }
         if (details.tempFile) {
-          text += `\n${theme.fg('muted', `Full output: ${details.tempFile}`)}`
+          text += `\n${theme.fg('muted', `full output: ${details.tempFile}`)}`
         }
       }
 
@@ -456,8 +508,8 @@ function createResponsiveBatchResultComponent(
       ].join('')
 
       const rows = expanded
-        ? renderBatchRows(details, width, true)
-        : renderBatchRows(details, width, false).slice(0, 4)
+        ? renderBatchRows(details, width, true, theme)
+        : renderBatchRows(details, width, false, theme).slice(0, 4)
 
       text.setText([header, ...rows].join('\n'))
       return text.render(width)
