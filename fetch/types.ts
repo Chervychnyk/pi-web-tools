@@ -117,6 +117,12 @@ export type FetchDetails = {
   errorCode?: FetchErrorCode
   errorPhase?: FetchErrorPhase
   retryable?: boolean
+  // Partial-render fields. Set on each progress emit during execution so
+  // renderResult can show a live status line ("⋯ network · 120ms"). These
+  // also leak into the final result harmlessly — phase is whatever phase
+  // produced the result, elapsedMs is total wall-clock.
+  phase?: string
+  elapsedMs?: number
 }
 
 export type BatchFetchItemSummary = {
@@ -150,7 +156,10 @@ export type ImageToolContent = {
   mimeType: string
 }
 export type FetchToolContent = Array<TextToolContent | ImageToolContent>
-export type FetchProgressUpdate = { content: TextToolContent[] }
+export type FetchProgressUpdate = {
+  content: TextToolContent[]
+  details?: Partial<FetchDetails>
+}
 export type FetchProgressHandler = (update: FetchProgressUpdate) => void
 
 export type GuardedFetchResponse = {

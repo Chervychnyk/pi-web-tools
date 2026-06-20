@@ -412,6 +412,55 @@ describe('createWebFetchTool — execute()', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
+  it('emits partial-details (phase + elapsedMs) through onUpdate during execution', async () => {
+    const partials: Array<{ phase?: string; elapsedMs?: number; url?: string }> = []
+    const tool = buildFetchTool({
+      networkFetcher: async () => ({
+        response: {
+          ...createResponse('https://example.com/p', 200, {
+            'content-type': 'text/plain; charset=utf-8',
+          }),
+          bodyBuffer: Buffer.from('body content', 'utf8'),
+        },
+        cloudflareBypassed: false,
+      }),
+    })
+
+    await tool.execute(
+      'tool-partial',
+      { url: 'https://example.com/p', format: 'text' },
+      undefined,
+      (update) => {
+        if (update.details) {
+          partials.push({
+            phase: update.details.phase,
+            elapsedMs: update.details.elapsedMs,
+            url: update.details.url,
+          })
+        }
+      },
+    )
+
+    // Every phase should land at least once: resolve → network → response → download → process
+    const phases = partials.map((p) => p.phase)
+    assert.ok(phases.includes('resolve'), `expected resolve phase, got ${phases.join(',')}`)
+    assert.ok(phases.includes('network'), `expected network phase, got ${phases.join(',')}`)
+    assert.ok(phases.includes('response'), `expected response phase, got ${phases.join(',')}`)
+    assert.ok(phases.includes('download'), `expected download phase, got ${phases.join(',')}`)
+    // Every partial carries the request URL and a non-decreasing elapsedMs.
+    for (const partial of partials) {
+      assert.equal(partial.url, 'https://example.com/p')
+      assert.ok(typeof partial.elapsedMs === 'number', 'elapsedMs is set')
+      assert.ok((partial.elapsedMs ?? -1) >= 0, 'elapsedMs is non-negative')
+    }
+    for (let i = 1; i < partials.length; i += 1) {
+      assert.ok(
+        (partials[i]!.elapsedMs ?? 0) >= (partials[i - 1]!.elapsedMs ?? 0),
+        'elapsedMs is monotonically non-decreasing across phases',
+      )
+    }
+  })
+
   it('does not cache image responses (refetches on repeat)', async () => {
     let networkCalls = 0
     const tool = buildFetchTool({

@@ -52,3 +52,21 @@ incompatible selector falls back to HTTP rather than erroring).
 Registering custom handlers: `createWebFetchTool({ urlHandlers: [...] })`
 replaces the default prepended list. `DefaultHttpHandler` is always
 appended last and cannot be overridden through this seam.
+
+## FetchProgress
+
+`HandlerContext.progress` is a stateful per-invocation emitter (built by
+`createFetchProgress` in `fetch/progress.ts`). Calling `progress.emit(stage,
+message)` does three things:
+
+1. Builds a `stage: message` text block for the partial content.
+2. Stamps the partial details with `phase` (current stage) and `elapsedMs`
+   (wall-clock since the tool started).
+3. Calls `onUpdate` with the full partial result, which `pi-coding-agent`'s
+   `updateResult` semantics replace into the displayed render.
+
+This is what powers `renderResult`'s live status line — `⋯ phase · 120ms`
+during execution. External fetchers (network/jina/github) that take a raw
+`onUpdate` get it via `progress.onUpdate`; their emissions reach the UI as
+content-only (no `phase`/`elapsedMs`), and `renderResult` falls back to
+showing the raw text in that case.

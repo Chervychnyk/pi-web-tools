@@ -26,11 +26,11 @@ export function createGitHubHandler(
       }
     },
     async fetch(ctx) {
-      const { url, parsed, signal, onUpdate, cacheKey } = ctx
+      const { url, parsed, signal, progress, cacheKey } = ctx
       const githubContent = await githubFetcher(
         url.toString(),
         signal,
-        onUpdate,
+        progress.onUpdate,
         parsed.refresh,
       )
       if (!githubContent) return null

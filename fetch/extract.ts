@@ -7,17 +7,16 @@ import {
   isPoorMarkdownConversion,
   selectFragment,
 } from './content.ts'
-import { emitFetchProgress } from './progress.ts'
 import {
   decodeBodyAsText,
   extractPdfText,
   fetchViaJinaReader,
   looksLikeBlockedOrJunkContent,
 } from './network.ts'
+import type { FetchProgress } from './progress.ts'
 import type {
   ExtractedFetchContent,
   FetchOutputFormat,
-  FetchProgressHandler,
   FetchRequestOptions,
   FetchResponseClassification,
 } from './types.ts'
@@ -33,7 +32,7 @@ export async function extractFetchContent(
     classification: FetchResponseClassification
     selector?: string
     signal: AbortSignal
-    onUpdate?: FetchProgressHandler
+    progress: FetchProgress
     requestOptions?: Pick<FetchRequestOptions, 'proxy'>
   } & FetchExtractorDependencies,
 ): Promise<ExtractedFetchContent> {
@@ -42,7 +41,7 @@ export async function extractFetchContent(
     classification,
     selector,
     signal,
-    onUpdate,
+    progress,
     jinaFetcher,
     pdfTextExtractor,
     requestOptions,
@@ -55,7 +54,7 @@ export async function extractFetchContent(
   let jinaFallbackUsed = false
   let pdfExtracted = false
 
-  emitFetchProgress(onUpdate, 'process', format)
+  progress.emit('process', format)
 
   if (format === 'json') {
     try {
@@ -80,14 +79,13 @@ export async function extractFetchContent(
     }
   } else if (format === 'text' || format === 'markdown') {
     if (classification.isPdf) {
-      emitFetchProgress(onUpdate, 'extract', 'pdf text')
+      progress.emit('extract', 'pdf text')
       content = normalizeWhitespace(
         await pdfTextExtractor(bodyBuffer, signal),
       )
       pdfExtracted = true
     } else if (classification.isHtml) {
-      emitFetchProgress(
-        onUpdate,
+      progress.emit(
         'extract',
         selector
           ? `selector ${selector}`
@@ -98,7 +96,7 @@ export async function extractFetchContent(
       article = extractBestHtmlContent(raw, classification.finalUrl, selector)
 
       if (format === 'markdown') {
-        emitFetchProgress(onUpdate, 'convert', 'html → markdown')
+        progress.emit('convert', 'html → markdown')
         content = cleanupMarkdown(
           getTurndownService().turndown(article.contentHtml),
         )
@@ -113,7 +111,7 @@ export async function extractFetchContent(
         const jina = await jinaFetcher(
           new URL(classification.finalUrl),
           signal,
-          onUpdate,
+          progress.onUpdate,
           undefined,
           requestOptions,
         )

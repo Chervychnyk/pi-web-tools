@@ -30,7 +30,7 @@ import {
   parseBatchFetchParams,
   parseFetchParams,
 } from './params.ts'
-import { emitFetchProgress } from './progress.ts'
+import { createFetchProgress } from './progress.ts'
 import type {
   BatchFetchDetails,
   BatchFetchItemSummary,
@@ -233,13 +233,15 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
       const parsed = parseFetchParams(params)
       const cacheKey = buildFetchCacheKey(parsed)
 
+      const progress = createFetchProgress(onUpdate, { url: parsed.url })
+
       if (!parsed.refresh) {
         const cached = getCachedValue<{
           content: FetchToolContent
           details: FetchDetails
         }>(cacheKey)
         if (cached) {
-          emitFetchProgress(onUpdate, 'cache', 'hit')
+          progress.emit('cache', 'hit')
           return {
             content: cached.value.content,
             details: {
@@ -251,7 +253,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
         }
       }
 
-      emitFetchProgress(onUpdate, 'resolve', 'validating')
+      progress.emit('resolve', 'validating')
 
       const { controller, cleanup, rethrowIfAbort } = createAbortController(
         parsed.timeoutMs,
@@ -286,7 +288,7 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
             url,
             parsed,
             signal: controller.signal,
-            onUpdate,
+            progress,
             cacheKey,
             dispatch: (next) => runHandler(next, depth + 1, false, handler),
           })
@@ -326,15 +328,21 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
     },
     renderResult(result, { expanded, isPartial }, theme) {
       if (isPartial) {
-        const latest = Array.isArray(result.content)
-          ? result.content.find((c) => c.type === 'text')?.text
-          : undefined
-        const message = latest || 'fetching'
-        return new Text(
-          `${theme.fg('dim', '⋯ ')}${theme.fg('muted', message)}`,
-          0,
-          0,
-        )
+        const partial = (result.details || {}) as FetchDetails
+        const sep = theme.fg('dim', ' · ')
+        const parts: string[] = []
+        if (partial.phase) parts.push(theme.fg('accent', partial.phase))
+        if (partial.elapsedMs !== undefined) {
+          parts.push(theme.fg('dim', formatDuration(partial.elapsedMs)))
+        }
+        // Fall back to the raw content text when the partial details aren't
+        // populated yet (e.g. external fetcher emissions without a phase).
+        if (!parts.length && Array.isArray(result.content)) {
+          const latest = result.content.find((c) => c.type === 'text')?.text
+          if (latest) parts.push(theme.fg('muted', latest))
+        }
+        const message = parts.length ? parts.join(sep) : theme.fg('muted', 'fetching')
+        return new Text(`${theme.fg('dim', '⋯ ')}${message}`, 0, 0)
       }
 
       const details = (result.details || {}) as FetchDetails

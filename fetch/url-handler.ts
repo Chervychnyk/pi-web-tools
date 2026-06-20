@@ -1,6 +1,6 @@
+import type { FetchProgress } from './progress.ts'
 import type {
   FetchDetails,
-  FetchProgressHandler,
   FetchToolContent,
   ParsedFetchParams,
 } from './types.ts'
@@ -16,7 +16,10 @@ export type HandlerContext = {
   url: URL
   parsed: ParsedFetchParams
   signal: AbortSignal
-  onUpdate?: FetchProgressHandler
+  // Stateful progress emitter — calls populate partial details with
+  // elapsedMs + phase so renderResult can show a live status line.
+  // .onUpdate is the raw callback for external fetchers that take one.
+  progress: FetchProgress
   cacheKey: string
   // Re-dispatch on a resolved URL (e.g. after HTTP redirects).
   // Returns null if no other handler claims the URL — caller stays on its

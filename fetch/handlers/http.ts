@@ -13,7 +13,6 @@ import {
   shouldApplyHtmlGuard,
   shouldUseJinaFallbackForStatus,
 } from '../network.ts'
-import { emitFetchProgress } from '../progress.ts'
 import {
   assembleTextFetchResult,
   buildFileFetchResult,
@@ -86,11 +85,12 @@ export function createDefaultHttpHandler(
       // because we don't know the response MIME type yet.
     },
     async fetch(ctx): Promise<FetchResult> {
-      const { url, parsed, signal, onUpdate, cacheKey } = ctx
+      const { url, parsed, signal, progress, cacheKey } = ctx
+      const onUpdate = progress.onUpdate
       let downloadedFilePathForCleanup: string | undefined
 
       try {
-        emitFetchProgress(onUpdate, 'network', `GET ${url.hostname}`)
+        progress.emit('network', `GET ${url.hostname}`)
 
         const { response, cloudflareBypassed } = await networkFetcher(
           url,
@@ -104,8 +104,7 @@ export function createDefaultHttpHandler(
         )
         downloadedFilePathForCleanup = response.downloadedFilePath
 
-        emitFetchProgress(
-          onUpdate,
+        progress.emit(
           'response',
           `${response.status}${response.statusText ? ` ${response.statusText}` : ''}`,
         )
@@ -224,11 +223,7 @@ export function createDefaultHttpHandler(
           const streamedSize =
             response.downloadedFileSize ?? classification.contentLength ?? 0
 
-          emitFetchProgress(
-            onUpdate,
-            'download',
-            `${formatSize(streamedSize)} streamed to file`,
-          )
+          progress.emit('download', `${formatSize(streamedSize)} streamed to file`)
 
           const fileResult = buildFileFetchResult({
             bodyBuffer: response.downloadedFilePath ? undefined : response.bodyBuffer,
@@ -266,7 +261,7 @@ export function createDefaultHttpHandler(
         )
         const bodySize = bodyBuffer.byteLength
 
-        emitFetchProgress(onUpdate, 'download', formatSize(bodySize))
+        progress.emit('download', formatSize(bodySize))
 
         if (
           classification.isHtml &&
@@ -331,7 +326,7 @@ export function createDefaultHttpHandler(
           classification,
           selector: parsed.selector,
           signal,
-          onUpdate,
+          progress,
           jinaFetcher,
           pdfTextExtractor,
           requestOptions: { proxy: parsed.proxy },
