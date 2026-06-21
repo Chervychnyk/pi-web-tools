@@ -9,7 +9,11 @@ import {
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
-import { readWebToolsConfig, type WebToolsConfig } from './config.ts'
+import {
+  getConfiguredValue,
+  readWebToolsConfig,
+  type WebToolsConfig,
+} from './config.ts'
 import type { SearchResultItem } from './providers/index.ts'
 import {
   DEFAULT_WEB_TOOLS_CACHE_DIR,
@@ -108,17 +112,7 @@ function getConfiguredStorageDir(
   env: NodeJS.ProcessEnv = process.env,
   config: WebToolsConfig = readWebToolsConfig(),
 ) {
-  return env.PI_WEB_TOOLS_STORAGE_DIR || config.storageDir
-}
-
-function getStorageRootCacheKey(
-  env: NodeJS.ProcessEnv,
-  config: WebToolsConfig,
-) {
-  return [
-    getConfiguredStorageDir(env, config) || '',
-    env.XDG_CACHE_HOME || '',
-  ].join('\u0000')
+  return getConfiguredValue(env.PI_WEB_TOOLS_STORAGE_DIR, config.storageDir)
 }
 
 export function getStorageRootCandidates(
@@ -137,12 +131,13 @@ export function resolveStorageRoot(
   env: NodeJS.ProcessEnv = process.env,
   config: WebToolsConfig = readWebToolsConfig(),
 ) {
-  const cacheKey = getStorageRootCacheKey(env, config)
+  const explicitDir = getConfiguredStorageDir(env, config)
+  const cacheKey = `${explicitDir || ''}\u0000${env.XDG_CACHE_HOME || ''}`
   const cached = STORAGE_ROOT_CACHE.get(cacheKey)
   if (cached) return cached
 
   const resolved = resolveWritableCacheDir({
-    explicitDir: getConfiguredStorageDir(env, config),
+    explicitDir,
     defaultDir: DEFAULT_WEB_TOOLS_CACHE_DIR,
     xdgDir: getXdgStorageRoot(env),
     fallbackDir: FALLBACK_WEB_TOOLS_CACHE_DIR,

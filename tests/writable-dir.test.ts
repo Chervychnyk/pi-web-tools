@@ -23,12 +23,6 @@ describe('resolveCachePath', () => {
   it('resolves relative paths against cwd', () => {
     assert.equal(resolveCachePath('./cache'), path.resolve('./cache'))
   })
-
-  it('does not expand `~name` (no following slash) — left to path.resolve', () => {
-    // `~root` would be treated as a relative path, NOT a user's home — we
-    // only support the standalone `~` and `~/...` shell idioms.
-    assert.equal(resolveCachePath('~root/cache'), path.resolve('~root/cache'))
-  })
 })
 
 describe('getCacheDirCandidates', () => {

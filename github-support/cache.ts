@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
-import { readWebToolsConfig } from '../config.ts'
+import { getConfiguredValue, readWebToolsConfig } from '../config.ts'
 import {
   DEFAULT_WEB_TOOLS_CACHE_DIR,
   FALLBACK_WEB_TOOLS_CACHE_DIR,
@@ -40,15 +40,12 @@ const IN_FLIGHT_CLONES = new Map<string, Promise<EnsureGitHubCloneResult>>()
 
 function getExplicitGitHubCacheDir(env: NodeJS.ProcessEnv = process.env) {
   const config = readWebToolsConfig()
-  const githubDir = env.PI_WEB_TOOLS_GITHUB_DIR || config.githubDir
-  if (githubDir?.trim()) {
-    return resolveCachePath(githubDir)
-  }
+  const githubDir = getConfiguredValue(env.PI_WEB_TOOLS_GITHUB_DIR, config.githubDir)
+  if (githubDir) return resolveCachePath(githubDir)
 
-  const storageDir = env.PI_WEB_TOOLS_STORAGE_DIR || config.storageDir
-  if (storageDir?.trim()) {
-    return path.join(resolveCachePath(storageDir), 'github')
-  }
+  const storageDir = getConfiguredValue(env.PI_WEB_TOOLS_STORAGE_DIR, config.storageDir)
+  if (storageDir) return path.join(resolveCachePath(storageDir), 'github')
+
   return undefined
 }
 
