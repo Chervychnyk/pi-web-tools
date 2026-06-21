@@ -7,10 +7,12 @@ import {
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
+import { readWebToolsConfig } from '../config.ts'
 import {
   DEFAULT_WEB_TOOLS_CACHE_DIR,
   FALLBACK_WEB_TOOLS_CACHE_DIR,
   getCacheDirCandidates,
+  resolveCachePath,
   resolveWritableCacheDir,
 } from '../utils/writable-dir.ts'
 import { cloneGitHubRepo } from './git.ts'
@@ -37,18 +39,22 @@ const CACHE_TOUCH_FILENAME = '.pi-web-tools-cache-touch'
 const IN_FLIGHT_CLONES = new Map<string, Promise<EnsureGitHubCloneResult>>()
 
 function getExplicitGitHubCacheDir(env: NodeJS.ProcessEnv = process.env) {
-  if (env.PI_WEB_TOOLS_GITHUB_DIR?.trim()) {
-    return path.resolve(env.PI_WEB_TOOLS_GITHUB_DIR)
+  const config = readWebToolsConfig()
+  const githubDir = env.PI_WEB_TOOLS_GITHUB_DIR || config.githubDir
+  if (githubDir?.trim()) {
+    return resolveCachePath(githubDir)
   }
-  if (env.PI_WEB_TOOLS_STORAGE_DIR?.trim()) {
-    return path.join(path.resolve(env.PI_WEB_TOOLS_STORAGE_DIR), 'github')
+
+  const storageDir = env.PI_WEB_TOOLS_STORAGE_DIR || config.storageDir
+  if (storageDir?.trim()) {
+    return path.join(resolveCachePath(storageDir), 'github')
   }
   return undefined
 }
 
 function getXdgGitHubCacheDir(env: NodeJS.ProcessEnv = process.env) {
   if (!env.XDG_CACHE_HOME?.trim()) return undefined
-  return path.join(path.resolve(env.XDG_CACHE_HOME), 'pi', 'web-tools', 'github')
+  return path.join(resolveCachePath(env.XDG_CACHE_HOME), 'pi', 'web-tools', 'github')
 }
 
 function canUseGitHubCacheDir(dir: string) {

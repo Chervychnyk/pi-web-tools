@@ -7,8 +7,10 @@ import { createGetWebContentTool } from '../get-web-content.ts'
 import { createListWebContentTool } from '../list-web-content.ts'
 import { getTextContent } from './helpers.ts'
 import {
+  getStorageRootCandidates,
   getStoredWebResponse,
   listStoredWebResponses,
+  resolveStorageRoot,
   sliceStoredText,
   storeWebResponse,
   tryStoreWebResponse,
@@ -155,6 +157,53 @@ describe('storage: storeWebResponse / getStoredWebResponse', () => {
       )
     } finally {
       console.warn = originalWarn
+    }
+  })
+})
+
+describe('storage root resolution (config-driven)', () => {
+  it('picks env.PI_WEB_TOOLS_STORAGE_DIR over config.storageDir', () => {
+    const candidates = getStorageRootCandidates(
+      { PI_WEB_TOOLS_STORAGE_DIR: '/from-env' } as never,
+      { storageDir: '/from-config' },
+    )
+    assert.equal(candidates[0], '/from-env')
+  })
+
+  it('uses config.storageDir when env is unset', () => {
+    const candidates = getStorageRootCandidates(
+      {} as never,
+      { storageDir: '/from-config' },
+    )
+    assert.equal(candidates[0], '/from-config')
+  })
+
+  it('expands `~` in config.storageDir', () => {
+    const candidates = getStorageRootCandidates(
+      {} as never,
+      { storageDir: '~/cache/web' },
+    )
+    assert.ok(
+      candidates[0]?.endsWith('cache/web'),
+      `expected resolved homedir path, got ${candidates[0]}`,
+    )
+    assert.ok(!candidates[0]?.startsWith('~'), 'tilde was expanded')
+  })
+
+  it('caches the resolved storage root by (env, config) shape', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'pi-web-tools-cfg-cache-'))
+    try {
+      const first = resolveStorageRoot(
+        { PI_WEB_TOOLS_STORAGE_DIR: dir } as never,
+        {},
+      )
+      const second = resolveStorageRoot(
+        { PI_WEB_TOOLS_STORAGE_DIR: dir } as never,
+        {},
+      )
+      assert.equal(first, second, 'identical env+config → same cached object')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

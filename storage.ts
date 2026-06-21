@@ -9,11 +9,13 @@ import {
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
+import { readWebToolsConfig, type WebToolsConfig } from './config.ts'
 import type { SearchResultItem } from './providers/index.ts'
 import {
   DEFAULT_WEB_TOOLS_CACHE_DIR,
   FALLBACK_WEB_TOOLS_CACHE_DIR,
   getCacheDirCandidates,
+  resolveCachePath,
   resolveWritableCacheDir,
 } from './utils/writable-dir.ts'
 
@@ -99,32 +101,48 @@ export type StoredContentSlice = {
 
 function getXdgStorageRoot(env: NodeJS.ProcessEnv = process.env) {
   if (!env.XDG_CACHE_HOME?.trim()) return undefined
-  return path.join(path.resolve(env.XDG_CACHE_HOME), 'pi', 'web-tools')
+  return path.join(resolveCachePath(env.XDG_CACHE_HOME), 'pi', 'web-tools')
 }
 
-function getStorageRootCacheKey(env: NodeJS.ProcessEnv) {
+function getConfiguredStorageDir(
+  env: NodeJS.ProcessEnv = process.env,
+  config: WebToolsConfig = readWebToolsConfig(),
+) {
+  return env.PI_WEB_TOOLS_STORAGE_DIR || config.storageDir
+}
+
+function getStorageRootCacheKey(
+  env: NodeJS.ProcessEnv,
+  config: WebToolsConfig,
+) {
   return [
-    env.PI_WEB_TOOLS_STORAGE_DIR || '',
+    getConfiguredStorageDir(env, config) || '',
     env.XDG_CACHE_HOME || '',
   ].join('\u0000')
 }
 
-export function getStorageRootCandidates(env: NodeJS.ProcessEnv = process.env) {
+export function getStorageRootCandidates(
+  env: NodeJS.ProcessEnv = process.env,
+  config: WebToolsConfig = readWebToolsConfig(),
+) {
   return getCacheDirCandidates({
-    explicitDir: env.PI_WEB_TOOLS_STORAGE_DIR,
+    explicitDir: getConfiguredStorageDir(env, config),
     defaultDir: DEFAULT_WEB_TOOLS_CACHE_DIR,
     xdgDir: getXdgStorageRoot(env),
     fallbackDir: FALLBACK_WEB_TOOLS_CACHE_DIR,
   })
 }
 
-export function resolveStorageRoot(env: NodeJS.ProcessEnv = process.env) {
-  const cacheKey = getStorageRootCacheKey(env)
+export function resolveStorageRoot(
+  env: NodeJS.ProcessEnv = process.env,
+  config: WebToolsConfig = readWebToolsConfig(),
+) {
+  const cacheKey = getStorageRootCacheKey(env, config)
   const cached = STORAGE_ROOT_CACHE.get(cacheKey)
   if (cached) return cached
 
   const resolved = resolveWritableCacheDir({
-    explicitDir: env.PI_WEB_TOOLS_STORAGE_DIR,
+    explicitDir: getConfiguredStorageDir(env, config),
     defaultDir: DEFAULT_WEB_TOOLS_CACHE_DIR,
     xdgDir: getXdgStorageRoot(env),
     fallbackDir: FALLBACK_WEB_TOOLS_CACHE_DIR,

@@ -27,14 +27,20 @@ const WRITABLE_CACHE_DIR_CACHE = new Map<
 
 const CACHE_KEY_SEPARATOR = String.fromCharCode(0)
 
+export function resolveCachePath(value: string) {
+  if (value === '~') return homedir()
+  if (value.startsWith('~/')) return path.join(homedir(), value.slice(2))
+  return path.resolve(value)
+}
+
 function dedupeResolvedPaths(paths: string[]) {
-  return [...new Set(paths.map((value) => path.resolve(value)))]
+  return [...new Set(paths.map((value) => resolveCachePath(value)))]
 }
 
 export function getCacheDirCandidates(options: CacheDirOptions) {
   const { explicitDir, defaultDir, xdgDir, fallbackDir } = options
   if (explicitDir?.trim()) {
-    return [path.resolve(explicitDir)]
+    return [resolveCachePath(explicitDir)]
   }
 
   const candidates = [defaultDir]

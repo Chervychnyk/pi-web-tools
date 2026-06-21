@@ -18,6 +18,8 @@ export type ToolGuidanceConfig = {
 export type WebToolsConfig = {
   provider?: string
   proxy?: string
+  storageDir?: string
+  githubDir?: string
   apiKeys?: Record<string, string>
   baseUrls?: Record<string, string>
   guidance?: Record<string, ToolGuidanceConfig>
