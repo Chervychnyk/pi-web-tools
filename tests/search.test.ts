@@ -16,6 +16,7 @@ import {
   dedupeResults,
 } from '../providers/shared.ts'
 import { SEARCH_PROVIDER_NAMES } from '../providers/types.ts'
+import { executeSearchBatch } from '../search-runner.ts'
 import { getStoredWebResponse } from '../storage.ts'
 import { clearToolCache } from '../utils/cache.ts'
 import { createWebSearchTool } from '../web-search.ts'
@@ -201,6 +202,105 @@ describe('applyPromptGuidance', () => {
   })
 })
 
+describe('SearchRunner', () => {
+  it('falls back within a single query and records attempts', async () => {
+    const controller = new AbortController()
+    const result = await executeSearchBatch({
+      queries: ['alpha'],
+      providers: [
+        {
+          name: 'duckduckgo',
+          search: async () => {
+            throw new Error('primary failed')
+          },
+        },
+        {
+          name: 'brave',
+          search: async (query) => [
+            { title: `${query} result`, url: 'https://example.com', snippet: 'ok' },
+          ],
+        },
+      ],
+      limit: 1,
+      controller,
+    })
+
+    assert.equal(result[0]?.provider, 'brave')
+    assert.equal(result[0]?.fallbackUsed, true)
+    assert.deepEqual(result[0]?.attempts.map((attempt) => [attempt.provider, attempt.ok]), [
+      ['duckduckgo', false],
+      ['brave', true],
+    ])
+  })
+
+  it('uses probe-first-then-parallel policy for multi-query provider failures', async () => {
+    const controller = new AbortController()
+    let primaryCalls = 0
+    let fallbackCalls = 0
+
+    const result = await executeSearchBatch({
+      queries: ['alpha', 'beta', 'gamma'],
+      providers: [
+        {
+          name: 'duckduckgo',
+          search: async () => {
+            primaryCalls += 1
+            throw new Error('primary unavailable')
+          },
+        },
+        {
+          name: 'brave',
+          search: async (query) => {
+            fallbackCalls += 1
+            return [{ title: query, url: `https://example.com/${query}`, snippet: 'ok' }]
+          },
+        },
+      ],
+      limit: 1,
+      controller,
+      providerFailurePolicy: 'probe-first-then-parallel',
+    })
+
+    assert.equal(primaryCalls, 1)
+    assert.equal(fallbackCalls, 3)
+    assert.deepEqual(result.map((item) => item.query), ['alpha', 'beta', 'gamma'])
+    assert.deepEqual(result.map((item) => item.provider), ['brave', 'brave', 'brave'])
+  })
+
+  it('propagates AbortError without trying fallback providers', async () => {
+    const controller = new AbortController()
+    let fallbackCalls = 0
+
+    await assert.rejects(
+      () => executeSearchBatch({
+        queries: ['alpha'],
+        providers: [
+          {
+            name: 'duckduckgo',
+            search: async () => {
+              const error = new Error('aborted')
+              error.name = 'AbortError'
+              throw error
+            },
+          },
+          {
+            name: 'brave',
+            search: async () => {
+              fallbackCalls += 1
+              return []
+            },
+          },
+        ],
+        limit: 1,
+        controller,
+      }),
+      /aborted/,
+    )
+
+    assert.equal(fallbackCalls, 0)
+  })
+})
+
 describe('createWebSearchTool', () => {
   beforeEach(() => clearToolCache())
 
@@ -270,6 +370,46 @@ describe('createWebSearchTool', () => {
     assert.equal(cacheCalls, 1)
     assert.equal(cached.details.cached, true)
     assert.equal(cached.details.count, 1)
+  })
+
+  it('reuses cached raw results across different maxChars values', async () => {
+    let cacheCalls = 0
+    const cacheTool = createWebSearchTool({
+      resolveProviders: () => [
+        {
+          name: 'duckduckgo',
+          search: async () => {
+            cacheCalls += 1
+            return [
+              {
+                title: 'Long Cached Result',
+                url: 'https://cached.test/long',
+                snippet: 'A long snippet that can be formatted repeatedly with different maxChars values.',
+              },
+            ]
+          },
+        },
+      ],
+    })
+
+    const small = await cacheTool.execute(
+      'search-tool-cache-small',
+      { query: 'cached-maxchars', limit: 1, maxChars: 20 },
+      undefined,
+      undefined,
+    )
+    const large = await cacheTool.execute(
+      'search-tool-cache-large',
+      { query: 'cached-maxchars', limit: 1, maxChars: 500 },
+      undefined,
+      undefined,
+    )
+
+    assert.equal(cacheCalls, 1)
+    assert.equal(small.details.charLimited, true)
+    assert.equal(large.details.cached, true)
+    assert.equal(large.details.charLimited, false)
+    assert.match(getTextContent(large.content), /A long snippet/)
   })
 
   it('memoises provider selection across queries in a single batch', async () => {

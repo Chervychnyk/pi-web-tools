@@ -4,6 +4,7 @@ import { Text } from '@mariozechner/pi-tui'
 import { Type } from 'typebox'
 import { applyPromptGuidance } from './config.ts'
 import { formatSearchResponseText } from './search-format.ts'
+import { executeSearchBatch, type SearchAttempt, type SearchQueryDetails } from './search-runner.ts'
 import { appendStoredResponseNote } from './shared.ts'
 import { DEFAULT_TIMEOUT, createAbortController } from './utils/abort.ts'
 import { buildCacheKey, getCachedValue, setCachedValue } from './utils/cache.ts'
@@ -28,28 +29,6 @@ const SEARCH_PREVIEW_SNIPPET_MAX_CHARS = 160
 const MAX_CACHED_SEARCH_PREVIEW_CHARS = 100_000
 
 type SearchProviderSummary = SearchProvider['name'] | 'mixed'
-
-type SearchBatchState = {
-  failedProviders: Map<SearchProvider['name'], SearchAttempt>
-}
-
-export type SearchAttempt = {
-  provider: SearchProvider['name']
-  ok: boolean
-  durationMs: number
-  count?: number
-  error?: string
-}
-
-export type SearchQueryDetails = {
-  query: string
-  count: number
-  results: SearchResultItem[]
-  provider: SearchProvider['name']
-  attempts: SearchAttempt[]
-  fallbackUsed: boolean
-  durationMs: number
-}
 
 export type SearchDetails = {
   responseId?: string
@@ -115,166 +94,6 @@ function summarizeProvider(queryResults: SearchQueryDetails[]): SearchProviderSu
   return providers.length === 1 ? providers[0]! : 'mixed'
 }
 
-function getProvidersForQuery(
-  providers: SearchProvider[],
-  batchState: SearchBatchState | undefined,
-) {
-  if (!batchState) return providers
-
-  const available = providers.filter(
-    (provider) => !batchState.failedProviders.has(provider.name),
-  )
-
-  if (available.length) return available
-
-  const lastFailure = [...batchState.failedProviders.values()].at(-1)
-  throw new Error(
-    lastFailure?.error || 'All configured search providers previously failed for this batch',
-  )
-}
-
-async function executeSearchQuery(options: {
-  query: string
-  providers: SearchProvider[]
-  limit: number
-  controller: AbortController
-  onUpdate?: (update: { content: Array<{ type: 'text'; text: string }> }) => void
-  queryIndex: number
-  totalQueries: number
-  batchState?: SearchBatchState
-}) {
-  const {
-    query,
-    providers,
-    limit,
-    controller,
-    onUpdate,
-    queryIndex,
-    totalQueries,
-    batchState,
-  } = options
-
-  const attempts: SearchAttempt[] = []
-  const startedAt = Date.now()
-  const progressPrefix =
-    totalQueries > 1 ? `[${queryIndex + 1}/${totalQueries}] ` : ''
-  const providersToTry = getProvidersForQuery(providers, batchState)
-
-  for (const [index, provider] of providersToTry.entries()) {
-    onUpdate?.({
-      content: [
-        {
-          type: 'text',
-          text:
-            index === 0
-              ? `${progressPrefix}Searching ${provider.name} for: ${query}`
-              : `${progressPrefix}Primary provider failed, retrying with ${provider.name} for: ${query}`,
-        },
-      ],
-    })
-
-    const attemptStartedAt = Date.now()
-
-    try {
-      const results = await provider.search(query, limit, controller.signal)
-      attempts.push({
-        provider: provider.name,
-        ok: true,
-        durationMs: Date.now() - attemptStartedAt,
-        count: results.length,
-      })
-
-      return {
-        query,
-        count: results.length,
-        results,
-        provider: provider.name,
-        attempts,
-        fallbackUsed: attempts.length > 1,
-        durationMs: Date.now() - startedAt,
-      } satisfies SearchQueryDetails
-    } catch (error) {
-      if ((error as Error).name === 'AbortError') {
-        throw error
-      }
-
-      const attempt = {
-        provider: provider.name,
-        ok: false,
-        durationMs: Date.now() - attemptStartedAt,
-        error: error instanceof Error ? error.message : String(error),
-      } satisfies SearchAttempt
-
-      attempts.push(attempt)
-      batchState?.failedProviders.set(provider.name, attempt)
-
-      if (index === providersToTry.length - 1) {
-        throw error
-      }
-    }
-  }
-
-  throw new Error('Search failed without attempting a provider')
-}
-
-async function executeSearchBatch(options: {
-  queries: string[]
-  providers: SearchProvider[]
-  limit: number
-  controller: AbortController
-  onUpdate?: (update: { content: Array<{ type: 'text'; text: string }> }) => void
-}) {
-  const { queries, providers, limit, controller, onUpdate } = options
-
-  if (queries.length <= 1) {
-    return Promise.all(
-      queries.map((query, index) =>
-        executeSearchQuery({
-          query,
-          providers,
-          limit,
-          controller,
-          onUpdate,
-          queryIndex: index,
-          totalQueries: queries.length,
-        }),
-      ),
-    )
-  }
-
-  const batchState: SearchBatchState = {
-    failedProviders: new Map(),
-  }
-
-  const first = await executeSearchQuery({
-    query: queries[0]!,
-    providers,
-    limit,
-    controller,
-    onUpdate,
-    queryIndex: 0,
-    totalQueries: queries.length,
-    batchState,
-  })
-
-  const remaining = await Promise.all(
-    queries.slice(1).map((query, index) =>
-      executeSearchQuery({
-        query,
-        providers,
-        limit,
-        controller,
-        onUpdate,
-        queryIndex: index + 1,
-        totalQueries: queries.length,
-        batchState,
-      }),
-    ),
-  )
-
-  return [first, ...remaining]
-}
-
 function buildSearchPreview(queryResults: SearchQueryDetails[]) {
   return formatSearchResponseText(queryResults, {
     resultLimit:
@@ -283,6 +102,77 @@ function buildSearchPreview(queryResults: SearchQueryDetails[]) {
         : SINGLE_QUERY_PREVIEW_LIMIT,
     snippetMaxChars: SEARCH_PREVIEW_SNIPPET_MAX_CHARS,
   })
+}
+
+type SearchCacheEntry = {
+  queries: string[]
+  queryResults: SearchQueryDetails[]
+  requestedProvider: string
+  responseId?: string
+  durationMs: number
+}
+
+function buildSearchResponse(options: {
+  queries: string[]
+  queryResults: SearchQueryDetails[]
+  requestedProvider: string
+  maxChars?: number
+  responseId?: string
+  durationMs: number
+  cached: boolean
+  cacheAgeMs: number
+}) {
+  const {
+    queries,
+    queryResults,
+    requestedProvider,
+    maxChars,
+    responseId,
+    durationMs,
+    cached,
+    cacheAgeMs,
+  } = options
+  const previewText = buildSearchPreview(queryResults)
+  const output = truncateForModel(previewText, '.txt', maxChars)
+  const flattenedResults = queryResults.flatMap((item) => item.results)
+  const flattenedAttempts = queryResults.flatMap((item) => item.attempts)
+  const storedResponseSource =
+    queries.length === 1 ? queries[0] : `${queries.length} queries`
+
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: appendStoredResponseNote(output.text, responseId, 'get_web_content', {
+          source: storedResponseSource,
+          label: 'Search',
+        }),
+      },
+    ],
+    details: {
+      responseId,
+      query: queries.length === 1 ? queries[0] : undefined,
+      queries,
+      queryResults,
+      count: flattenedResults.length,
+      results: flattenedResults,
+      provider: summarizeProvider(queryResults),
+      truncated: output.truncated,
+      tempFile: output.tempFile,
+      totalBytes: output.totalBytes,
+      totalLines: output.totalLines,
+      maxChars: output.maxChars,
+      charLimited: output.charLimited,
+      originalChars: output.originalChars,
+      requestedProvider,
+      attempts: flattenedAttempts,
+      fallbackUsed: queryResults.some((item) => item.fallbackUsed),
+      durationMs,
+      aborted: false,
+      cached,
+      cacheAgeMs,
+    } satisfies SearchDetails,
+  }
 }
 
 export function createWebSearchTool(
@@ -373,34 +263,29 @@ export function createWebSearchTool(
         requestedProvider,
         providers: providers.map((provider) => provider.name),
         limit,
-        maxChars,
       })
 
       if (!refresh) {
-        const cached = getCachedValue<{
-          content: Array<{ type: 'text'; text: string }>
-          details: SearchDetails
-        }>(cacheKey)
+        const cached = getCachedValue<SearchCacheEntry>(cacheKey)
         if (cached) {
+          const response = buildSearchResponse({
+            ...cached.value,
+            maxChars,
+            cached: true,
+            cacheAgeMs: cached.ageMs,
+          })
           onUpdate?.({
             content: [
               {
                 type: 'text',
                 text:
                   queries.length === 1
-                    ? `Using cached ${cached.value.details.provider} results for: ${queries[0]}`
+                    ? `Using cached ${response.details.provider} results for: ${queries[0]}`
                     : `Using cached results for ${queries.length} queries`,
               },
             ],
           })
-          return {
-            content: cached.value.content,
-            details: {
-              ...cached.value.details,
-              cached: true,
-              cacheAgeMs: cached.ageMs,
-            } satisfies SearchDetails,
-          }
+          return response
         }
       }
 
@@ -448,49 +333,30 @@ export function createWebSearchTool(
             durationMs: item.durationMs,
           })),
         })
-        const output = truncateForModel(previewText, '.txt', maxChars)
-        const flattenedResults = queryResults.flatMap((item) => item.results)
-        const flattenedAttempts = queryResults.flatMap((item) => item.attempts)
-
-        const storedResponseSource =
-          queries.length === 1 ? queries[0] : `${queries.length} queries`
-        const response = {
-          content: [
-            {
-              type: 'text' as const,
-              text: appendStoredResponseNote(output.text, stored?.responseId, 'get_web_content', {
-                source: storedResponseSource,
-                label: 'Search',
-              }),
-            },
-          ],
-          details: {
-            responseId: stored?.responseId,
-            query: queries.length === 1 ? queries[0] : undefined,
-            queries,
-            queryResults,
-            count: flattenedResults.length,
-            results: flattenedResults,
-            provider: summarizeProvider(queryResults),
-            truncated: output.truncated,
-            tempFile: output.tempFile,
-            totalBytes: output.totalBytes,
-            totalLines: output.totalLines,
-            maxChars: output.maxChars,
-            charLimited: output.charLimited,
-            originalChars: output.originalChars,
-            requestedProvider,
-            attempts: flattenedAttempts,
-            fallbackUsed: queryResults.some((item) => item.fallbackUsed),
-            durationMs: Date.now() - startedAt,
-            aborted: false,
-            cached: false,
-            cacheAgeMs: 0,
-          } satisfies SearchDetails,
-        }
+        const durationMs = Date.now() - startedAt
+        const response = buildSearchResponse({
+          queries,
+          queryResults,
+          requestedProvider,
+          maxChars,
+          responseId: stored?.responseId,
+          durationMs,
+          cached: false,
+          cacheAgeMs: 0,
+        })
 
         if (previewText.length <= MAX_CACHED_SEARCH_PREVIEW_CHARS) {
-          setCachedValue(cacheKey, response, SEARCH_CACHE_TTL_MS)
+          setCachedValue(
+            cacheKey,
+            {
+              queries,
+              queryResults,
+              requestedProvider,
+              responseId: stored?.responseId,
+              durationMs,
+            } satisfies SearchCacheEntry,
+            SEARCH_CACHE_TTL_MS,
+          )
         }
         return response
       } catch (error) {

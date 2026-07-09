@@ -19,8 +19,6 @@ export {
   decodeBodyAsText,
   decodeContentEncoding,
   extractPdfText,
-  fetchWithOptionalCloudflareRetry,
-  fetchWithRedirects,
   getResponseByteLimit,
   isBlockedHostname,
   isPdfMimeType,
@@ -38,6 +36,10 @@ export {
   shouldApplyHtmlGuard,
   shouldUseJinaFallbackForStatus,
 } from './fetch/network.ts'
+export {
+  fetchWithOptionalCloudflareRetry,
+  fetchWithRedirects,
+} from './fetch/guarded-http-client.ts'
 export {
   cleanupMarkdown,
   extractBestHtmlContent,

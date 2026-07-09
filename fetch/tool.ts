@@ -13,18 +13,16 @@ import {
   renderBadges,
   renderToolCallHeader,
 } from '../utils/ui.ts'
-import {
-  buildWebFetchErrorMessage,
-  mapUnknownError,
-} from './errors.ts'
+import { buildWebFetchErrorMessage, mapUnknownError } from './errors.ts'
+import { buildBatchSummaryText, runFetchBatch } from './batch-runner.ts'
 import { createGitHubHandler } from './handlers/github.ts'
 import { createDefaultHttpHandler } from './handlers/http.ts'
 import {
   MAX_HTML_BYTES,
   extractPdfText,
   fetchViaJinaReader,
-  fetchWithOptionalCloudflareRetry,
 } from './network.ts'
+import { fetchWithOptionalCloudflareRetry } from './guarded-http-client.ts'
 import {
   buildFetchCacheKey,
   parseBatchFetchParams,
@@ -468,35 +466,6 @@ export function createWebFetchTool(deps: Partial<WebFetchDependencies> = {}) {
   })
 }
 
-function buildBatchSummaryText(details: BatchFetchDetails) {
-  const lines = [
-    `Batch web fetch: ${details.completed}/${details.total} complete · ${details.succeeded} succeeded · ${details.failed} failed · concurrency ${details.concurrency}`,
-  ]
-
-  for (const item of details.items) {
-    if (item.status === 'done') {
-      const responseId = item.responseId ? ` responseId=${item.responseId}` : ''
-      const statusCode = item.statusCode ? ` HTTP ${item.statusCode}` : ''
-      lines.push(`${item.index + 1}. ✓ ${item.url}${statusCode}${responseId}`)
-      continue
-    }
-
-    if (item.status === 'error') {
-      const errorTag = item.errorCode
-        ? ` [${item.errorCode}/${item.errorPhase || 'unknown'}]`
-        : ''
-      lines.push(
-        `${item.index + 1}. ✗ ${item.url}${errorTag} — ${item.error || 'Unknown error'}`,
-      )
-      continue
-    }
-
-    lines.push(`${item.index + 1}. … ${item.url} — ${item.status}`)
-  }
-
-  return lines.join('\n')
-}
-
 function createResponsiveBatchResultComponent(
   details: BatchFetchDetails,
   expanded: boolean,
@@ -608,112 +577,28 @@ export function createBatchWebFetchTool(
         parsedBatch.requests.length,
       )
 
-      const items: BatchFetchItemSummary[] = parsedBatch.requests.map(
-        (request, index) => ({
-          index,
-          url: request.url,
-          status: 'queued',
-          progress: statusToProgress('queued'),
-        }),
-      )
-
-      let completed = 0
-      let succeeded = 0
-      let failed = 0
-
-      const emitUpdate = () => {
-        const details: BatchFetchDetails = {
-          total: items.length,
-          completed,
-          succeeded,
-          failed,
-          concurrency,
-          items: items.map((item) => ({ ...item })),
-        }
-
-        onUpdate?.({
-          content: [{ type: 'text', text: buildBatchSummaryText(details) }],
-          details,
-        })
-      }
-
-      emitUpdate()
-
-      let nextIndex = 0
-      const worker = async () => {
-        while (true) {
-          const index = nextIndex
-          nextIndex += 1
-          if (index >= parsedBatch.requests.length) return
-
-          const request = parsedBatch.requests[index]!
-          items[index] = {
-            ...items[index]!,
-            status: 'running',
-            progress: statusToProgress('running'),
-          }
-          emitUpdate()
-
-          try {
-            const result = await singleFetchTool.execute(
-              `batch_web_fetch_${index}`,
-              {
-                url: request.url,
-                format: request.requestedFormat,
-                selector: request.selector,
-                headers: request.headers,
-                proxy: request.proxy,
-                timeout: request.timeoutMs,
-                maxChars: request.maxChars,
-                refresh: request.refresh,
-              },
-              signal,
-              undefined,
-            )
-
-            const details = (result.details || {}) as FetchDetails
-            items[index] = {
-              ...items[index]!,
-              status: 'done',
-              progress: statusToProgress('done'),
-              title: details.title,
-              format: details.format,
-              responseId: details.responseId,
-              statusCode: details.status,
-            }
-            completed += 1
-            succeeded += 1
-          } catch (error) {
-            const mapped = mapUnknownError(error, request.url)
-            items[index] = {
-              ...items[index]!,
-              status: 'error',
-              progress: statusToProgress('error'),
-              error: mapped.message,
-              errorCode: mapped.meta.code,
-              errorPhase: mapped.meta.phase,
-              retryable: mapped.meta.retryable,
-            }
-            completed += 1
-            failed += 1
-          }
-
-          emitUpdate()
-        }
-      }
-
-      await Promise.all(
-        Array.from({ length: concurrency }, async () => worker()),
-      )
-
-      const finalDetails: BatchFetchDetails = {
-        total: items.length,
-        completed,
-        succeeded,
-        failed,
+      const finalDetails = await runFetchBatch({
+        requests: parsedBatch.requests,
         concurrency,
-        items,
-      }
+        onUpdate,
+        fetchOne(index, request) {
+          return singleFetchTool.execute(
+            `batch_web_fetch_${index}`,
+            {
+              url: request.url,
+              format: request.requestedFormat,
+              selector: request.selector,
+              headers: request.headers,
+              proxy: request.proxy,
+              timeout: request.timeoutMs,
+              maxChars: request.maxChars,
+              refresh: request.refresh,
+            },
+            signal,
+            undefined,
+          )
+        },
+      })
 
       return {
         content: [{ type: 'text', text: buildBatchSummaryText(finalDetails) }],

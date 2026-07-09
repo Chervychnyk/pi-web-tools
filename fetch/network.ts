@@ -112,7 +112,7 @@ export function isPrivateIpAddress(address: string) {
   return false
 }
 
-function assertSafeFetchUrl(url: URL) {
+export function assertSafeFetchUrl(url: URL) {
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error(`Unsupported protocol: ${url.protocol}`)
   }
@@ -346,7 +346,7 @@ async function loadProxyAgentConstructor(): Promise<ProxyAgentLike> {
   return proxyAgentConstructorPromise
 }
 
-async function requestWithDnsGuard(
+export async function requestWithDnsGuard(
   url: URL,
   signal: AbortSignal,
   userAgent: string,
